@@ -6,9 +6,9 @@ const router = useRouter()
 
 const restaurant = computed(() => {
   try {
-    const data = sessionStorage.getItem(
-      'rodo_registration_result'
-    )
+    const data =
+      sessionStorage.getItem('rodo_registration_result') ||
+      localStorage.getItem('rodo_restaurant')
 
     return data ? JSON.parse(data) : null
   } catch {

@@ -618,7 +618,40 @@ onMounted(async () => {
   try {
     const response = await api.get('/restaurant/me')
     restaurant.value = response.data.data
+    if (restaurant.value?.code) {
+      localStorage.setItem('rodo_restaurant_code', restaurant.value.code)
+    }
   } catch {
+    // Intento de auto-recuperación si existen datos de registro o código previo
+    const saved = localStorage.getItem('rodo_restaurant') || sessionStorage.getItem('rodo_registration_result')
+    const savedCode = localStorage.getItem('rodo_restaurant_code') || sessionStorage.getItem('rodo_restaurant_code')
+    let identifier = savedCode
+    if (!identifier && saved) {
+      try {
+        const parsed = JSON.parse(saved)
+        identifier = parsed?.code || parsed?.name
+      } catch {
+        // ignore JSON parse error
+      }
+    }
+
+    if (identifier) {
+      try {
+        const recoveryRes = await api.post('/restaurant/login', { identifier })
+        restaurant.value = recoveryRes.data.data
+        if (recoveryRes.data.data.token) {
+          localStorage.setItem('rodo_token', recoveryRes.data.data.token)
+          sessionStorage.setItem('rodo_token', recoveryRes.data.data.token)
+        }
+        if (recoveryRes.data.data.code) {
+          localStorage.setItem('rodo_restaurant_code', recoveryRes.data.data.code)
+        }
+        return
+      } catch (recoveryErr) {
+        console.warn('Auto-recuperación de sesión fallida:', recoveryErr)
+      }
+    }
+
     error.value = 'No hay una sesión válida. Inicia sesión o registra tu restaurante.'
   }
 })
@@ -829,7 +862,32 @@ function resetOrderForm() {
 
       <!-- Mensaje de error general -->
       <div v-if="error" class="alert-box alert-error" role="alert">
-        {{ error }}
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+          <span>{{ error }}</span>
+          <router-link
+            v-if="!restaurant"
+            to="/registro"
+            class="action-btn"
+            style="background: #d71920; color: #fff; text-decoration: none; padding: 6px 14px; border-radius: 8px; font-weight: 600; font-size: 0.85rem;"
+          >
+            🔑 Iniciar sesión / Registrar
+          </router-link>
+        </div>
+      </div>
+
+      <!-- Tarjeta cuando no hay sesión activa identificada -->
+      <div v-if="!restaurant && !result" class="card" style="text-align: center; padding: 48px 24px; margin-top: 16px;">
+        <div style="font-size: 48px; margin-bottom: 12px;">🏪</div>
+        <h3 style="font-size: 1.35rem; margin-bottom: 8px; color: #1e293b; font-weight: 800;">Identificación requerida</h3>
+        <p style="color: #64748b; max-width: 480px; margin: 0 auto 24px; font-size: 0.95rem; line-height: 1.5;">
+          Para poder registrar pedidos y solicitar repartidores, ingresa con el nombre o código de tu establecimiento.
+        </p>
+        <router-link
+          to="/registro"
+          style="display: inline-flex; align-items: center; gap: 8px; background: linear-gradient(135deg, #d71920, #b9151b); color: #fff; padding: 12px 24px; border-radius: 10px; text-decoration: none; font-weight: 700; box-shadow: 0 4px 12px rgba(215, 25, 32, 0.3);"
+        >
+          Iniciar sesión o Registrarse →
+        </router-link>
       </div>
 
       <!-- Formulario principal de pedido -->
