@@ -79,7 +79,7 @@ const whatsappUrl = computed(() => {
     `_Favor de asignar repartidor a la brevedad._`,
   ].join('\n')
 
-  return `https://wa.me/524151805038?text=${encodeURIComponent(message)}`
+  return `https://api.whatsapp.com/send?phone=524151805038&text=${encodeURIComponent(message)}`
 })
 
 async function copyTicketLink() {
@@ -615,7 +615,7 @@ const quickWhatsappUrl = computed(() => {
     `_Favor de coordinar la salida de los repartidores._`,
   ].join('\n')
 
-  return `https://wa.me/524151805038?text=${encodeURIComponent(message)}`
+  return `https://api.whatsapp.com/send?phone=524151805038&text=${encodeURIComponent(message)}`
 })
 
 async function copyQuickRiderLink() {
