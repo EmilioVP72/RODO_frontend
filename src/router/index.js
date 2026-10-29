@@ -2,6 +2,8 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 import RestaurantRegister from '../views/public/RestaurantRegister.vue'
 import RegistrationSuccess from '../views/restaurant/RegistrationSuccess.vue'
+import OrderForm from '../views/restaurant/OrderForm.vue'
+import PublicTicket from '../views/public/PublicTicket.vue'
 
 const routes = [
   {
@@ -17,6 +19,16 @@ const routes = [
     path: '/registro/exitoso',
     name: 'registration-success',
     component: RegistrationSuccess,
+  },
+  {
+    path: '/pedidos/nuevo',
+    name: 'new-order',
+    component: OrderForm,
+  },
+  {
+    path: '/ticket/:token',
+    name: 'public-ticket',
+    component: PublicTicket,
   },
 ]
 
