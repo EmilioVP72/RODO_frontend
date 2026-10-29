@@ -30,6 +30,11 @@ const routes = [
     name: 'public-ticket',
     component: PublicTicket,
   },
+  {
+    path: '/solicitud/:token',
+    name: 'public-rider-request',
+    component: () => import('../views/public/PublicRiderRequest.vue'),
+  },
 ]
 
 const router = createRouter({
