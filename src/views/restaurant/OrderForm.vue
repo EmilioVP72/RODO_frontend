@@ -29,9 +29,15 @@ function showToast(msg, type = 'info') {
 // URLs y compartir ticket (Fase 3.4)
 const ticketUrl = computed(() => {
   if (!result.value) return ''
-  if (result.value.ticket_url) return result.value.ticket_url
-  if (result.value.public_token) {
-    return `${window.location.origin}/ticket/${result.value.public_token}`
+  const token = result.value.public_token
+  if (token) {
+    const origin = (typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('localhost'))
+      ? window.location.origin
+      : 'https://rodo-frontend-phi.vercel.app'
+    return `${origin}/ticket/${token}`
+  }
+  if (result.value.ticket_url && !result.value.ticket_url.includes('localhost')) {
+    return result.value.ticket_url
   }
   return ''
 })
@@ -39,9 +45,41 @@ const ticketUrl = computed(() => {
 const whatsappUrl = computed(() => {
   if (!result.value || !ticketUrl.value) return ''
   const restaurantName = restaurant.value?.name || result.value.restaurant?.name || 'Restaurante'
+  const code = restaurant.value?.code || result.value.restaurant?.code || ''
   const folio = result.value.folio || ''
-  const message = `RODO Moto Mandados\nNuevo pedido registrado.\nRestaurante: ${restaurantName}\nFolio: ${folio}\nConsulta el ticket:\n${ticketUrl.value}`
-  return `https://wa.me/?text=${encodeURIComponent(message)}`
+  const fee = result.value.delivery_fee ? `$${Number(result.value.delivery_fee).toFixed(2)} MXN` : null
+  const neighborhood = result.value.neighborhood ? result.value.neighborhood : null
+  const paymentMethod = result.value.payment_method || null
+  const toCollect = result.value.amount_to_collect ? `$${Number(result.value.amount_to_collect).toFixed(2)}` : null
+
+  let paymentLine = ''
+  if (paymentMethod) {
+    paymentLine = `\n💳 *Pago:* ${paymentMethod}`
+    if (toCollect && (paymentMethod === 'Efectivo' || paymentMethod === 'Contraentrega')) {
+      paymentLine += ` (Cobrar ${toCollect})`
+    }
+  }
+
+  const codeBadge = code ? ` (#${code})` : ''
+  const feeLine = fee ? `\n💵 *Tarifa de envío:* ${fee}` : ''
+  const zoneLine = neighborhood ? `\n📍 *Zona de entrega:* ${neighborhood}` : ''
+
+  const message = [
+    `🛵 *RODO MOTO MANDADOS*`,
+    `━━━━━━━━━━━━━━━━━━━━`,
+    `✨ *Nuevo Pedido Registrado*`,
+    ``,
+    `🏪 *Local:* ${restaurantName}${codeBadge}`,
+    `📋 *Folio:* ${folio}${feeLine}${paymentLine}${zoneLine}`,
+    ``,
+    `🎟️ *Ver Ticket Digital y Mapa:*`,
+    `👉 ${ticketUrl.value}`,
+    ``,
+    `━━━━━━━━━━━━━━━━━━━━`,
+    `_Favor de asignar repartidor a la brevedad._`,
+  ].join('\n')
+
+  return `https://wa.me/524151805038?text=${encodeURIComponent(message)}`
 })
 
 async function copyTicketLink() {
@@ -539,9 +577,15 @@ const quickCopySuccess = ref(false)
 
 const quickRiderUrl = computed(() => {
   if (!quickResult.value) return ''
-  if (quickResult.value.request_url) return quickResult.value.request_url
-  if (quickResult.value.public_token) {
-    return `${window.location.origin}/solicitud/${quickResult.value.public_token}`
+  const token = quickResult.value.public_token
+  if (token) {
+    const origin = (typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('localhost'))
+      ? window.location.origin
+      : 'https://rodo-frontend-phi.vercel.app'
+    return `${origin}/solicitud/${token}`
+  }
+  if (quickResult.value.request_url && !quickResult.value.request_url.includes('localhost')) {
+    return quickResult.value.request_url
   }
   return ''
 })
@@ -552,9 +596,26 @@ const quickWhatsappUrl = computed(() => {
   const code = restaurant.value?.code || quickResult.value.restaurant?.code || ''
   const folio = quickResult.value.folio || ''
   const count = quickResult.value.riders_count || 1
-  const note = quickResult.value.note ? `\nNota: ${quickResult.value.note}` : ''
-  const message = `RODO Moto Mandados\n⚡ Solicitud urgente de repartidores\nRestaurante: ${restaurantName} (#${code})\nFolio: ${folio}\nRepartidores requeridos: ${count}${note}\n\nVer solicitud en tiempo real:\n${quickRiderUrl.value}`
-  return `https://wa.me/?text=${encodeURIComponent(message)}`
+  const note = quickResult.value.note ? `\n📝 *Nota:* ${quickResult.value.note}` : ''
+  const codeBadge = code ? ` (#${code})` : ''
+
+  const message = [
+    `🛵 *RODO MOTO MANDADOS*`,
+    `━━━━━━━━━━━━━━━━━━━━`,
+    `⚡ *Solicitud Urgente de Repartidores*`,
+    ``,
+    `🏪 *Local:* ${restaurantName}${codeBadge}`,
+    `📋 *Folio:* ${folio}`,
+    `🏍️ *Repartidores requeridos:* ${count}${note}`,
+    ``,
+    `📲 *Ver solicitud en tiempo real:*`,
+    `👉 ${quickRiderUrl.value}`,
+    ``,
+    `━━━━━━━━━━━━━━━━━━━━`,
+    `_Favor de coordinar la salida de los repartidores._`,
+  ].join('\n')
+
+  return `https://wa.me/524151805038?text=${encodeURIComponent(message)}`
 })
 
 async function copyQuickRiderLink() {
