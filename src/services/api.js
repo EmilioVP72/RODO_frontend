@@ -11,7 +11,7 @@ const api = axios.create({
   timeout: 15000,
 })
 
-// Automatically attach Bearer token and Restaurant code headers to all requests
+// Automatically attach Bearer token, Restaurant code, and Admin token headers to all requests
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('rodo_token') || sessionStorage.getItem('rodo_token')
   if (token) {
@@ -21,6 +21,12 @@ api.interceptors.request.use((config) => {
   const code = localStorage.getItem('rodo_restaurant_code') || sessionStorage.getItem('rodo_restaurant_code')
   if (code) {
     config.headers['X-Restaurant-Code'] = code
+  }
+
+  const adminToken = localStorage.getItem('rodo_admin_token') || sessionStorage.getItem('rodo_admin_token')
+  if (adminToken) {
+    config.headers['X-Admin-Token'] = adminToken
+    config.headers['X-Admin-Code'] = '000'
   }
 
   return config

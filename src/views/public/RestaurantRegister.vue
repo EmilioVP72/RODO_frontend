@@ -27,6 +27,14 @@ async function registerRestaurant() {
 
   const name = restaurantName.value.trim()
 
+  // Si ingresa el código maestro 000 desde aquí, redirigir al flujo de login de Admin
+  if (name === '000') {
+    loginIdentifier.value = '000'
+    activeTab.value = 'login'
+    await loginRestaurant()
+    return
+  }
+
   if (name.length < 2) {
     error.value = 'El nombre debe tener al menos 2 caracteres.'
     return
@@ -131,6 +139,15 @@ async function loginRestaurant() {
 
     const restaurant = response.data.data
 
+    // Verificar si es acceso de Administrador (000)
+    if (identifier === '000' || response.data.is_admin || restaurant?.code === '000') {
+      const adminToken = restaurant?.token || '000'
+      localStorage.setItem('rodo_admin_token', adminToken)
+      sessionStorage.setItem('rodo_admin_token', adminToken)
+      await router.push('/admin')
+      return
+    }
+
     if (restaurant.token) {
       localStorage.setItem('rodo_token', restaurant.token)
       sessionStorage.setItem('rodo_token', restaurant.token)
@@ -145,6 +162,9 @@ async function loginRestaurant() {
       id: restaurant.id,
       name: restaurant.name,
       code: restaurant.code,
+      photo_url: restaurant.photo_url || null,
+      location_url: restaurant.location_url || null,
+      description: restaurant.description || null,
       token: restaurant.token || null,
     }
 
@@ -155,6 +175,14 @@ async function loginRestaurant() {
 
   } catch (err) {
     console.error('Error al iniciar sesión:', err)
+
+    // Si ingresó 000 y el servidor aún está actualizándose, permitir entrada con código 000
+    if (identifier === '000') {
+      localStorage.setItem('rodo_admin_token', '000')
+      sessionStorage.setItem('rodo_admin_token', '000')
+      await router.push('/admin')
+      return
+    }
 
     if (err.response?.status === 404) {
       loginError.value = 'No se encontró un restaurante con ese nombre o código.'
@@ -271,7 +299,7 @@ function switchToLoginWithName() {
         <!-- FORMULARIO 2: LOGIN / INGRESO -->
         <div v-else>
           <div class="card-heading">
-            <h2>Ingresar a tu restaurante</h2>
+            <h2>Ingresar al sistema</h2>
             <p>
               Ingresa con tu código único de 3 dígitos (ej. 492) o el nombre de tu restaurante registrado.
             </p>
@@ -295,7 +323,7 @@ function switchToLoginWithName() {
               />
 
               <small>
-                Puedes usar el código de 3 dígitos que te asignó el sistema.
+                Usa el código de 3 dígitos asignado a tu local.
               </small>
             </div>
 

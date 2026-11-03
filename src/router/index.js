@@ -26,6 +26,11 @@ const routes = [
     component: OrderForm,
   },
   {
+    path: '/admin',
+    name: 'admin-dashboard',
+    component: () => import('../views/admin/AdminDashboard.vue'),
+  },
+  {
     path: '/ticket/:token',
     name: 'public-ticket',
     component: PublicTicket,
