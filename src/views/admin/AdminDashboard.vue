@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, watch, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api, { initializeCsrf } from '../../services/api'
 
@@ -60,6 +60,8 @@ const summaryData = reactive({
     avg_distance_km: 0,
     orders_ready_count: 0,
     orders_needing_change: 0,
+    orders_completed_count: 0,
+    orders_pending_count: 0,
     total_restaurants: 0,
     active_restaurants: 0,
     restaurants_with_orders: 0,
@@ -79,14 +81,36 @@ const summaryData = reactive({
   restaurants_list: [],
 })
 
-async function fetchSummary() {
-  summaryLoading.value = true
+const completingOrderId = ref(null)
+let summaryPollTimer = null
+
+function isOrderCompleted(status) {
+  return status === 'completed' || status === 'delivered'
+}
+
+function formatOrderStatus(status) {
+  const map = {
+    pending: '⏳ Pendiente',
+    assigned: '🛵 Asignado',
+    picked_up: '📦 En camino',
+    delivered: '✅ Completado',
+    completed: '✅ Completado',
+    cancelled: '✕ Cancelado',
+  }
+  return map[status] || '⏳ Pendiente'
+}
+
+async function fetchSummary(silent = false) {
+  if (!silent) {
+    summaryLoading.value = true
+  }
   try {
     const params = {
       period: filters.period,
       restaurant_id: filters.restaurant_id,
       payment_method: filters.payment_method,
       status: filters.status,
+      _t: Date.now(),
     }
     if (filters.period === 'custom') {
       if (filters.date_from) params.date_from = filters.date_from
@@ -100,17 +124,39 @@ async function fetchSummary() {
     Object.assign(summaryData.charts, data.charts || {})
     summaryData.recent_orders = data.recent_orders || []
     summaryData.restaurants_list = data.restaurants_list || []
-    ordersPage.value = 1
+    if (!silent) {
+      ordersPage.value = 1
+    } else if (ordersPage.value > totalOrdersPages.value) {
+      ordersPage.value = totalOrdersPages.value
+    }
   } catch (err) {
     console.error('Error al cargar el resumen de admin:', err)
     if (err.response?.status === 401) {
       showToast('Sesión de administrador expirada. Ingresa con el código 000.', 'error')
       router.push('/registro')
-    } else {
+    } else if (!silent) {
       showToast('No se pudieron cargar las métricas del dashboard.', 'error')
     }
   } finally {
-    summaryLoading.value = false
+    if (!silent) {
+      summaryLoading.value = false
+    }
+  }
+}
+
+async function completeOrderFromAdmin(order) {
+  if (!order?.public_token || completingOrderId.value) return
+  completingOrderId.value = order.id
+  try {
+    await api.post(`/tickets/${order.public_token}/complete`)
+    order.status = 'completed'
+    order.delivered_at = new Date().toISOString()
+    showToast(`Pedido ${order.folio} marcado como Completado.`)
+    await fetchSummary(true)
+  } catch {
+    showToast('No se pudo actualizar el estatus del pedido.', 'error')
+  } finally {
+    completingOrderId.value = null
   }
 }
 
@@ -125,6 +171,9 @@ function switchToSection(section, subTab = null) {
   activeSection.value = section
   if (subTab) {
     summaryTab.value = subTab
+    if (subTab === 'orders') {
+      fetchSummary(true)
+    }
   }
 }
 
@@ -198,7 +247,7 @@ function exportRecentOrdersCsv() {
     return
   }
 
-  const headers = ['Folio', 'Restaurante', 'Codigo', 'Cliente', 'Telefono', 'Colonia', 'Distancia_km', 'Tarifa_MXN', 'Metodo_Pago', 'Cobrar_MXN', 'Fecha']
+  const headers = ['Folio', 'Restaurante', 'Codigo', 'Cliente', 'Telefono', 'Colonia', 'Distancia_km', 'Tarifa_MXN', 'Metodo_Pago', 'Cobrar_MXN', 'Estatus_Ticket', 'Fecha']
   const csvLines = [
     headers.join(','),
     ...rows.map((o) =>
@@ -213,6 +262,7 @@ function exportRecentOrdersCsv() {
         o.delivery_fee,
         `"${o.payment_method || ''}"`,
         o.amount_to_collect ?? 0,
+        isOrderCompleted(o.status) ? 'Completado' : 'Pendiente',
         o.created_at || '',
       ].join(',')
     ),
@@ -507,12 +557,39 @@ function formatDateShort(iso) {
   })
 }
 
+function handleWindowFocus() {
+  if (activeSection.value === 'resumen') {
+    fetchSummary(true)
+  }
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible' && activeSection.value === 'resumen') {
+    fetchSummary(true)
+  }
+}
+
 onMounted(async () => {
   const adminToken = localStorage.getItem('rodo_admin_token') || sessionStorage.getItem('rodo_admin_token')
   if (!adminToken) {
     localStorage.setItem('rodo_admin_token', '000')
   }
+  window.addEventListener('focus', handleWindowFocus)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  summaryPollTimer = setInterval(() => {
+    if (document.visibilityState === 'visible' && activeSection.value === 'resumen') {
+      fetchSummary(true)
+    }
+  }, 15000)
   await Promise.all([fetchSummary(), fetchRestaurants()])
+})
+
+onUnmounted(() => {
+  window.removeEventListener('focus', handleWindowFocus)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  if (summaryPollTimer) {
+    clearInterval(summaryPollTimer)
+  }
 })
 </script>
 
@@ -657,7 +734,7 @@ onMounted(async () => {
             <button
               type="button"
               :class="['mode-pill', { active: summaryTab === 'orders' }]"
-              @click="summaryTab = 'orders'"
+              @click="switchToSection('resumen', 'orders')"
             >
               🧾 Pedidos ({{ summaryData.recent_orders.length }})
             </button>
@@ -784,7 +861,7 @@ onMounted(async () => {
             <div class="kpi-value">{{ summaryData.kpis.total_orders }}</div>
             <div class="kpi-title">Pedidos Registrados</div>
             <div class="kpi-sub">
-              ✓ {{ summaryData.kpis.orders_ready_count }} listos · {{ summaryData.kpis.orders_needing_change }} con cambio
+              ✅ {{ summaryData.kpis.orders_completed_count }} completados · ⏳ {{ summaryData.kpis.orders_pending_count }} pendientes
             </div>
           </div>
 
@@ -1117,26 +1194,51 @@ onMounted(async () => {
           <div class="table-header-row">
             <div>
               <h3>🧾 Historial Reciente de Entregas</h3>
-              <p>Consulta rápida de folios, tarifas y enlace directo al ticket digital</p>
+              <p>Consulta rápida de folios, tarifas, estatus del ticket y enlace directo</p>
             </div>
-            <div v-if="totalOrdersPages > 1" class="pagination-controls">
-              <button
-                type="button"
-                class="page-btn"
-                :disabled="ordersPage <= 1"
-                @click="ordersPage--"
-              >
-                ◀ Anterior
-              </button>
-              <span class="page-indicator">Página {{ ordersPage }} de {{ totalOrdersPages }}</span>
-              <button
-                type="button"
-                class="page-btn"
-                :disabled="ordersPage >= totalOrdersPages"
-                @click="ordersPage++"
-              >
-                Siguiente ▶
-              </button>
+            <div class="table-header-controls">
+              <div class="status-quick-pills">
+                <button
+                  type="button"
+                  :class="['pill-btn', { active: filters.status === 'all' }]"
+                  @click="filters.status = 'all'; fetchSummary()"
+                >
+                  Todos ({{ summaryData.kpis.total_orders }})
+                </button>
+                <button
+                  type="button"
+                  :class="['pill-btn', { active: filters.status === 'pending' }]"
+                  @click="filters.status = 'pending'; fetchSummary()"
+                >
+                  ⏳ Pendientes ({{ summaryData.kpis.orders_pending_count }})
+                </button>
+                <button
+                  type="button"
+                  :class="['pill-btn', { active: filters.status === 'completed' }]"
+                  @click="filters.status = 'completed'; fetchSummary()"
+                >
+                  ✅ Completados ({{ summaryData.kpis.orders_completed_count }})
+                </button>
+              </div>
+              <div v-if="totalOrdersPages > 1" class="pagination-controls">
+                <button
+                  type="button"
+                  class="page-btn"
+                  :disabled="ordersPage <= 1"
+                  @click="ordersPage--"
+                >
+                  ◀ Anterior
+                </button>
+                <span class="page-indicator">Página {{ ordersPage }} de {{ totalOrdersPages }}</span>
+                <button
+                  type="button"
+                  class="page-btn"
+                  :disabled="ordersPage >= totalOrdersPages"
+                  @click="ordersPage++"
+                >
+                  Siguiente ▶
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1151,9 +1253,9 @@ onMounted(async () => {
                   <th>Distancia</th>
                   <th>Tarifa</th>
                   <th>Pago / Cobro</th>
-                  <th>Estatus</th>
+                  <th>Estatus del Ticket</th>
                   <th>Fecha</th>
-                  <th>Ticket</th>
+                  <th>Acciones</th>
                 </tr>
               </thead>
               <tbody>
@@ -1173,7 +1275,7 @@ onMounted(async () => {
                       <small>{{ order.neighborhood }} · {{ order.street }}</small>
                     </div>
                   </td>
-                  <td>{{ order.distance_km }} km</td>
+                  <td>{{ Number(order.distance_km || 0).toFixed(1) }} km</td>
                   <td>
                     <strong style="color: #059669;">{{ formatCurrency(order.delivery_fee) }}</strong>
                   </td>
@@ -1186,24 +1288,41 @@ onMounted(async () => {
                     </div>
                   </td>
                   <td>
-                    <span
-                      :class="[
-                        'field-chip',
-                        order.status === 'completed' || order.status === 'delivered' ? 'chip-ok' : 'chip-missing'
-                      ]"
-                    >
-                      {{ order.status === 'completed' || order.status === 'delivered' ? '✓ Completado' : '⏳ Pendiente' }}
-                    </span>
+                    <div class="order-status-cell">
+                      <span
+                        :class="[
+                          'order-status-pill',
+                          isOrderCompleted(order.status) ? 'status-pill-completed' : 'status-pill-pending'
+                        ]"
+                      >
+                        {{ formatOrderStatus(order.status) }}
+                      </span>
+                      <small v-if="isOrderCompleted(order.status) && order.delivered_at" class="status-time-sub">
+                        {{ formatDateShort(order.delivered_at) }}
+                      </small>
+                    </div>
                   </td>
                   <td>{{ formatDateShort(order.created_at) }}</td>
                   <td>
-                    <router-link
-                      :to="`/ticket/${order.public_token}`"
-                      target="_blank"
-                      class="btn-table-link"
-                    >
-                      👁️ Ticket
-                    </router-link>
+                    <div class="table-actions-inline">
+                      <button
+                        v-if="!isOrderCompleted(order.status)"
+                        type="button"
+                        class="btn-complete-inline"
+                        :disabled="completingOrderId === order.id"
+                        title="Marcar ticket como completado"
+                        @click="completeOrderFromAdmin(order)"
+                      >
+                        {{ completingOrderId === order.id ? '⏳' : '✓ Completar' }}
+                      </button>
+                      <router-link
+                        :to="`/ticket/${order.public_token}`"
+                        target="_blank"
+                        class="btn-table-link"
+                      >
+                        👁️ Ticket
+                      </router-link>
+                    </div>
                   </td>
                 </tr>
               </tbody>
@@ -1217,11 +1336,11 @@ onMounted(async () => {
                 <span class="folio-pill">{{ order.folio }}</span>
                 <span
                   :class="[
-                    'field-chip',
-                    order.status === 'completed' || order.status === 'delivered' ? 'chip-ok' : 'chip-missing'
+                    'order-status-pill',
+                    isOrderCompleted(order.status) ? 'status-pill-completed' : 'status-pill-pending'
                   ]"
                 >
-                  {{ order.status === 'completed' || order.status === 'delivered' ? '✓ Completado' : '⏳ Pendiente' }}
+                  {{ formatOrderStatus(order.status) }}
                 </span>
                 <span class="mob-order-date">{{ formatDateShort(order.created_at) }}</span>
               </div>
@@ -1230,7 +1349,7 @@ onMounted(async () => {
                 <small>(#{{ order.restaurant?.code }})</small>
               </div>
               <div class="mob-order-dest">
-                📍 {{ order.customer_name }} · {{ order.neighborhood }} ({{ order.distance_km }} km)
+                📍 {{ order.customer_name }} · {{ order.neighborhood }} ({{ Number(order.distance_km || 0).toFixed(1) }} km)
               </div>
               <div class="mob-order-bottom">
                 <div>
@@ -1242,9 +1361,20 @@ onMounted(async () => {
                     </template>
                   </small>
                 </div>
-                <router-link :to="`/ticket/${order.public_token}`" target="_blank" class="btn-table-link">
-                  👁️ Ver Ticket
-                </router-link>
+                <div class="table-actions-inline">
+                  <button
+                    v-if="!isOrderCompleted(order.status)"
+                    type="button"
+                    class="btn-complete-inline"
+                    :disabled="completingOrderId === order.id"
+                    @click="completeOrderFromAdmin(order)"
+                  >
+                    {{ completingOrderId === order.id ? '⏳' : '✓ Completar' }}
+                  </button>
+                  <router-link :to="`/ticket/${order.public_token}`" target="_blank" class="btn-table-link">
+                    👁️ Ver Ticket
+                  </router-link>
+                </div>
               </div>
             </div>
           </div>
@@ -2706,6 +2836,19 @@ onMounted(async () => {
   color: #64748b;
 }
 
+.table-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.status-quick-pills {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .pagination-controls {
   display: flex;
   align-items: center;
@@ -2777,6 +2920,69 @@ onMounted(async () => {
 .table-rest-cell small {
   color: #64748b;
   font-size: 0.68rem;
+}
+
+.order-status-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.order-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 99px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.status-pill-completed {
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #86efac;
+}
+
+.status-pill-pending {
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+
+.status-time-sub {
+  font-size: 0.64rem;
+  color: #64748b;
+}
+
+.table-actions-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-complete-inline {
+  padding: 4px 8px;
+  background: #16a34a;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 0.7rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease;
+}
+
+.btn-complete-inline:hover:not(:disabled) {
+  background: #15803d;
+}
+
+.btn-complete-inline:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }
 
 .btn-table-link {
