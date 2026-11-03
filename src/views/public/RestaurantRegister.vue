@@ -165,6 +165,7 @@ async function loginRestaurant() {
       photo_url: restaurant.photo_url || null,
       location_url: restaurant.location_url || null,
       description: restaurant.description || null,
+      fixed_delivery_fee: restaurant.fixed_delivery_fee ?? null,
       token: restaurant.token || null,
     }
 

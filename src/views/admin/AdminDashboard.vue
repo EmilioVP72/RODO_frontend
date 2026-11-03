@@ -244,6 +244,7 @@ const isEditing = ref(false)
 const savingRestaurant = ref(false)
 const modalError = ref('')
 const photoInputMode = ref('upload') // 'upload' | 'url'
+const feeMode = ref('dynamic') // 'dynamic' | 'fixed'
 const fileInputRef = ref(null)
 
 const restaurantForm = reactive({
@@ -253,6 +254,7 @@ const restaurantForm = reactive({
   photo_url: '',
   location_url: '',
   description: '',
+  fixed_delivery_fee: '',
   is_active: true,
 })
 
@@ -307,6 +309,7 @@ const filteredRestaurantsStats = computed(() => {
     active: list.filter((r) => r.is_active).length,
     complete: list.filter((r) => r.has_complete_profile).length,
     incomplete: list.filter((r) => !r.has_complete_profile).length,
+    withFixedFee: list.filter((r) => r.fixed_delivery_fee !== null && Number(r.fixed_delivery_fee) > 0).length,
   }
 })
 
@@ -319,7 +322,9 @@ function openCreateModal() {
   restaurantForm.photo_url = ''
   restaurantForm.location_url = ''
   restaurantForm.description = ''
+  restaurantForm.fixed_delivery_fee = ''
   restaurantForm.is_active = true
+  feeMode.value = 'dynamic'
   photoInputMode.value = 'upload'
   showModal.value = true
 }
@@ -333,6 +338,9 @@ function openEditModal(rest) {
   restaurantForm.photo_url = rest.photo_url || ''
   restaurantForm.location_url = rest.location_url || ''
   restaurantForm.description = rest.description || ''
+  const hasFixed = rest.fixed_delivery_fee !== null && rest.fixed_delivery_fee !== undefined && Number(rest.fixed_delivery_fee) > 0
+  restaurantForm.fixed_delivery_fee = hasFixed ? Number(rest.fixed_delivery_fee) : ''
+  feeMode.value = hasFixed ? 'fixed' : 'dynamic'
   restaurantForm.is_active = Boolean(rest.is_active)
   photoInputMode.value = rest.photo_url && rest.photo_url.startsWith('http') ? 'url' : 'upload'
   showModal.value = true
@@ -400,11 +408,20 @@ async function saveRestaurant() {
   try {
     await initializeCsrf()
 
+    const resolvedFixedFee =
+      feeMode.value === 'fixed' &&
+      restaurantForm.fixed_delivery_fee !== '' &&
+      restaurantForm.fixed_delivery_fee !== null &&
+      Number(restaurantForm.fixed_delivery_fee) > 0
+        ? Number(restaurantForm.fixed_delivery_fee)
+        : null
+
     const payload = {
       name: cleanName,
       photo_url: restaurantForm.photo_url ? restaurantForm.photo_url.trim() : null,
       location_url: restaurantForm.location_url ? restaurantForm.location_url.trim() : null,
       description: restaurantForm.description ? restaurantForm.description.trim() : null,
+      fixed_delivery_fee: resolvedFixedFee,
       is_active: restaurantForm.is_active,
     }
 
@@ -1231,8 +1248,8 @@ onMounted(async () => {
               <strong>{{ filteredRestaurantsStats.complete }}</strong>
             </div>
             <div class="crud-stat-pill stat-amber">
-              <span>Por completar:</span>
-              <strong>{{ filteredRestaurantsStats.incomplete }}</strong>
+              <span>Con tarifa fija:</span>
+              <strong>{{ filteredRestaurantsStats.withFixedFee }}</strong>
             </div>
           </div>
 
@@ -1308,6 +1325,16 @@ onMounted(async () => {
 
               <!-- Checklist de campos del Admin -->
               <div class="profile-badges-row">
+                <span
+                  v-if="rest.fixed_delivery_fee !== null && Number(rest.fixed_delivery_fee) > 0"
+                  class="field-chip chip-fixed-fee"
+                >
+                  📌 Tarifa fija: {{ formatCurrency(rest.fixed_delivery_fee) }}
+                </span>
+                <span v-else class="field-chip chip-auto-fee">
+                  📏 Tarifa por km ($40-$50)
+                </span>
+
                 <span :class="['field-chip', rest.photo_url ? 'chip-ok' : 'chip-missing']">
                   {{ rest.photo_url ? '✓ Foto' : '○ Sin foto' }}
                 </span>
@@ -1497,7 +1524,7 @@ onMounted(async () => {
             <div class="input-with-action">
               <input
                 v-model="restaurantForm.location_url"
-                type="url"
+                type="text"
                 placeholder="https://maps.app.goo.gl/... o https://www.google.com/maps/..."
               />
               <a
@@ -1510,7 +1537,64 @@ onMounted(async () => {
                 Probar ↗
               </a>
             </div>
-            <small>Pega el enlace de Google Maps para ubicar rápidamente el restaurante.</small>
+            <small>Con esta ubicación se calculará automáticamente la distancia y tarifa hacia el cliente.</small>
+          </div>
+
+          <!-- Tarifa de Entrega (Automática por ubicación vs Tarifa Fija) -->
+          <div class="form-field">
+            <div class="field-label-row">
+              <label>💵 Esquema de Tarifa de Entrega</label>
+              <div class="mini-tabs">
+                <button
+                  type="button"
+                  :class="['mini-tab', { active: feeMode === 'dynamic' }]"
+                  @click="feeMode = 'dynamic'; restaurantForm.fixed_delivery_fee = ''"
+                >
+                  📏 Por distancia ($40-$50)
+                </button>
+                <button
+                  type="button"
+                  :class="['mini-tab', { active: feeMode === 'fixed' }]"
+                  @click="feeMode = 'fixed'"
+                >
+                  📌 Tarifa Fija
+                </button>
+              </div>
+            </div>
+
+            <div v-if="feeMode === 'fixed'" class="fixed-fee-config-box">
+              <div class="fixed-fee-input-row">
+                <span class="currency-prefix">$</span>
+                <input
+                  v-model.number="restaurantForm.fixed_delivery_fee"
+                  type="number"
+                  min="1"
+                  max="5000"
+                  step="0.50"
+                  placeholder="Ej. 45.00"
+                  required
+                />
+                <span class="currency-suffix">MXN</span>
+              </div>
+              <div class="preset-fees-row">
+                <span>Rápido:</span>
+                <button
+                  v-for="preset in [35, 40, 45, 50, 60]"
+                  :key="preset"
+                  type="button"
+                  :class="['preset-fee-btn', { active: Number(restaurantForm.fixed_delivery_fee) === preset }]"
+                  @click="restaurantForm.fixed_delivery_fee = preset"
+                >
+                  ${{ preset }}
+                </button>
+              </div>
+              <small>
+                ⚠️ Al asignar tarifa fija, este local siempre tendrá <strong>${{ restaurantForm.fixed_delivery_fee || '0.00' }} MXN</strong> de envío sin importar la distancia.
+              </small>
+            </div>
+            <small v-else>
+              El sistema calculará la tarifa automáticamente según los kilómetros entre la ubicación del local y el destino ($40 base + $2/km).
+            </small>
           </div>
 
           <div class="form-field">
@@ -2922,9 +3006,70 @@ onMounted(async () => {
   color: #047857;
 }
 
+.chip-fixed-fee {
+  background: #fef3c7;
+  color: #b45309;
+  border: 1px solid #fde68a;
+}
+
+.chip-auto-fee {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
 .chip-missing {
   background: #f1f5f9;
   color: #64748b;
+}
+
+.fixed-fee-config-box {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  padding: 10px 12px;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fixed-fee-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.currency-prefix,
+.currency-suffix {
+  font-weight: 800;
+  color: #92400e;
+  font-size: 0.9rem;
+}
+
+.preset-fees-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 0.75rem;
+  color: #92400e;
+  font-weight: 700;
+}
+
+.preset-fee-btn {
+  border: 1px solid #fcd34d;
+  background: #fff;
+  color: #92400e;
+  padding: 3px 9px;
+  border-radius: 99px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.preset-fee-btn.active {
+  background: #d71920;
+  border-color: #d71920;
+  color: #fff;
 }
 
 .rest-card-footer {
