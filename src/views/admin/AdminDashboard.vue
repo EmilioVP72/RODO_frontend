@@ -44,6 +44,7 @@ const filters = reactive({
   date_to: '',
   restaurant_id: 'all',
   payment_method: 'all',
+  status: 'all',
 })
 
 const summaryData = reactive({
@@ -85,6 +86,7 @@ async function fetchSummary() {
       period: filters.period,
       restaurant_id: filters.restaurant_id,
       payment_method: filters.payment_method,
+      status: filters.status,
     }
     if (filters.period === 'custom') {
       if (filters.date_from) params.date_from = filters.date_from
@@ -761,6 +763,12 @@ onMounted(async () => {
               <option value="Transferencia">Transferencia</option>
               <option value="Pagado">Ya pagado / Tarjeta</option>
             </select>
+
+            <select v-model="filters.status" aria-label="Filtrar por estatus" @change="fetchSummary">
+              <option value="all">📌 Todos los estatus</option>
+              <option value="pending">⏳ Pendientes</option>
+              <option value="completed">✓ Completados</option>
+            </select>
           </div>
         </div>
 
@@ -1143,6 +1151,7 @@ onMounted(async () => {
                   <th>Distancia</th>
                   <th>Tarifa</th>
                   <th>Pago / Cobro</th>
+                  <th>Estatus</th>
                   <th>Fecha</th>
                   <th>Ticket</th>
                 </tr>
@@ -1176,6 +1185,16 @@ onMounted(async () => {
                       </small>
                     </div>
                   </td>
+                  <td>
+                    <span
+                      :class="[
+                        'field-chip',
+                        order.status === 'completed' || order.status === 'delivered' ? 'chip-ok' : 'chip-missing'
+                      ]"
+                    >
+                      {{ order.status === 'completed' || order.status === 'delivered' ? '✓ Completado' : '⏳ Pendiente' }}
+                    </span>
+                  </td>
                   <td>{{ formatDateShort(order.created_at) }}</td>
                   <td>
                     <router-link
@@ -1196,6 +1215,14 @@ onMounted(async () => {
             <div v-for="order in summaryData.recent_orders" :key="'mob-' + order.id" class="mobile-order-card">
               <div class="mob-order-top">
                 <span class="folio-pill">{{ order.folio }}</span>
+                <span
+                  :class="[
+                    'field-chip',
+                    order.status === 'completed' || order.status === 'delivered' ? 'chip-ok' : 'chip-missing'
+                  ]"
+                >
+                  {{ order.status === 'completed' || order.status === 'delivered' ? '✓ Completado' : '⏳ Pendiente' }}
+                </span>
                 <span class="mob-order-date">{{ formatDateShort(order.created_at) }}</span>
               </div>
               <div class="mob-order-rest">

@@ -11,6 +11,12 @@ const error = ref('')
 const errorCode = ref(null)
 const ticket = ref(null)
 const copySuccess = ref(false)
+const completing = ref(false)
+const completeError = ref('')
+
+const isCompleted = computed(
+  () => ticket.value?.status === 'completed' || ticket.value?.status === 'delivered'
+)
 
 async function fetchTicket() {
   if (!token.value) {
@@ -71,10 +77,26 @@ function formatStatus(status) {
     pending: 'Pendiente de repartidor',
     assigned: 'Repartidor asignado',
     picked_up: 'En camino / Recogido',
-    delivered: 'Entregado',
+    delivered: 'Completado',
+    completed: 'Completado',
     cancelled: 'Cancelado',
   }
   return map[status] || status || 'Registrado'
+}
+
+async function markAsCompleted() {
+  if (!token.value || completing.value || isCompleted.value) return
+  completing.value = true
+  completeError.value = ''
+  try {
+    const response = await api.post(`/tickets/${token.value}/complete`)
+    ticket.value = response.data.data
+  } catch (err) {
+    completeError.value =
+      err.response?.data?.message || 'No se pudo actualizar el estatus a completado. Intenta nuevamente.'
+  } finally {
+    completing.value = false
+  }
 }
 
 async function copyTicketLink() {
@@ -288,6 +310,37 @@ onMounted(() => {
           </button>
         </footer>
 
+        <!-- Botón hasta abajo para cambiar estatus a Completado -->
+        <section class="complete-order-section">
+          <div v-if="isCompleted" class="completed-state-box">
+            <span class="completed-badge-icon">✓</span>
+            <div class="completed-state-text">
+              <strong>Pedido marcado como Completado</strong>
+              <span v-if="ticket.delivered_at">
+                Completado el {{ formatDate(ticket.delivered_at) }}
+              </span>
+              <span v-else>
+                El estatus de este pedido ya fue actualizado a completado.
+              </span>
+            </div>
+          </div>
+
+          <button
+            v-else
+            type="button"
+            class="btn btn-complete-order"
+            :disabled="completing"
+            @click="markAsCompleted"
+          >
+            <span v-if="completing">⏳ Actualizando estatus...</span>
+            <span v-else>✅ Marcar pedido como Completado</span>
+          </button>
+
+          <p v-if="completeError" class="complete-error-msg">
+            {{ completeError }}
+          </p>
+        </section>
+
         <div class="disclaimer">
           <small>
             Ticket digital oficial de <strong>RODO Moto Mandados</strong>.
@@ -445,9 +498,11 @@ onMounted(() => {
   color: #3730a3;
 }
 
-.status-delivered {
+.status-delivered,
+.status-completed {
   background: #dcfce7;
   color: #166534;
+  border: 1px solid #86efac;
 }
 
 .status-cancelled {
@@ -769,6 +824,78 @@ onMounted(() => {
   margin: 0 auto;
 }
 
+.complete-order-section {
+  padding: 0 24px 16px;
+  background: #fafafa;
+}
+
+.btn-complete-order {
+  width: 100%;
+  background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 800;
+  padding: 14px 20px;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(22, 163, 74, 0.25);
+  transition: all 0.15s ease;
+}
+
+.btn-complete-order:hover:not(:disabled) {
+  background: linear-gradient(135deg, #15803d 0%, #166534 100%);
+  transform: translateY(-1px);
+}
+
+.btn-complete-order:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.completed-state-box {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #ecfdf5;
+  border: 1.5px solid #6ee7b7;
+  color: #065f46;
+  padding: 12px 16px;
+  border-radius: 10px;
+}
+
+.completed-badge-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #10b981;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.completed-state-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+
+.completed-state-text strong {
+  font-size: 14px;
+  color: #064e3b;
+}
+
+.complete-error-msg {
+  margin: 8px 0 0;
+  color: #dc2626;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+
 .disclaimer {
   padding: 16px 24px 24px;
   text-align: center;
@@ -786,7 +913,7 @@ onMounted(() => {
     padding: 0;
     background: #ffffff;
   }
-  .receipt-actions, .disclaimer, .maps-button {
+  .receipt-actions, .complete-order-section, .disclaimer, .maps-button {
     display: none !important;
   }
   .ticket-receipt {
@@ -804,6 +931,9 @@ onMounted(() => {
   .receipt-section,
   .receipt-actions {
     padding: 16px 14px;
+  }
+  .complete-order-section {
+    padding: 0 14px 14px;
   }
   .folio-text {
     font-size: 17px;
