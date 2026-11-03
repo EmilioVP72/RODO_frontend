@@ -797,11 +797,28 @@ onMounted(() => {
 }
 
 @media (max-width: 480px) {
+  .ticket-page {
+    padding: 12px 10px 36px;
+  }
+  .receipt-header,
+  .receipt-section,
+  .receipt-actions {
+    padding: 16px 14px;
+  }
+  .folio-text {
+    font-size: 17px;
+    word-break: break-all;
+  }
   .info-grid {
     grid-template-columns: 1fr;
+    gap: 10px;
   }
   .receipt-actions {
     grid-template-columns: 1fr;
+  }
+  .maps-button {
+    width: 100%;
+    box-sizing: border-box;
   }
 }
 </style>

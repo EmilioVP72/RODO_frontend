@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api, { initializeCsrf } from '../../services/api'
 
@@ -7,6 +7,14 @@ const router = useRouter()
 
 // Navegación principal del Dashboard
 const activeSection = ref('resumen') // 'resumen' | 'restaurantes'
+const summaryTab = ref('charts') // 'charts' | 'orders'
+
+// Paginación para adaptar al monitor sin scrollbars
+const ordersPage = ref(1)
+const ORDERS_PER_PAGE = 7
+
+const restaurantsPage = ref(1)
+const RESTAURANTS_PER_PAGE = 6
 
 // Notificaciones Toast
 const toast = reactive({
@@ -90,6 +98,7 @@ async function fetchSummary() {
     Object.assign(summaryData.charts, data.charts || {})
     summaryData.recent_orders = data.recent_orders || []
     summaryData.restaurants_list = data.restaurants_list || []
+    ordersPage.value = 1
   } catch (err) {
     console.error('Error al cargar el resumen de admin:', err)
     if (err.response?.status === 401) {
@@ -109,6 +118,25 @@ function selectPeriod(periodKey) {
     fetchSummary()
   }
 }
+
+function switchToSection(section, subTab = null) {
+  activeSection.value = section
+  if (subTab) {
+    summaryTab.value = subTab
+  }
+}
+
+// Paginación de pedidos recientes en monitor
+const totalOrdersPages = computed(() => {
+  const total = summaryData.recent_orders?.length || 0
+  return Math.max(1, Math.ceil(total / ORDERS_PER_PAGE))
+})
+
+const paginatedRecentOrders = computed(() => {
+  const list = summaryData.recent_orders || []
+  const start = (ordersPage.value - 1) * ORDERS_PER_PAGE
+  return list.slice(start, start + ORDERS_PER_PAGE)
+})
 
 // Cálculos para las gráficas interactivas
 const maxDailyValue = computed(() => {
@@ -243,6 +271,7 @@ async function fetchRestaurants() {
       },
     })
     restaurants.value = response.data.data || []
+    restaurantsPage.value = 1
   } catch (err) {
     console.error('Error al cargar restaurantes:', err)
     showToast('Error al obtener la lista de restaurantes.', 'error')
@@ -250,6 +279,26 @@ async function fetchRestaurants() {
     restaurantsLoading.value = false
   }
 }
+
+const totalRestaurantsPages = computed(() => {
+  const total = restaurants.value?.length || 0
+  return Math.max(1, Math.ceil(total / RESTAURANTS_PER_PAGE))
+})
+
+const paginatedRestaurants = computed(() => {
+  const list = restaurants.value || []
+  const start = (restaurantsPage.value - 1) * RESTAURANTS_PER_PAGE
+  return list.slice(start, start + RESTAURANTS_PER_PAGE)
+})
+
+watch(
+  () => restaurants.value.length,
+  () => {
+    if (restaurantsPage.value > totalRestaurantsPages.value) {
+      restaurantsPage.value = totalRestaurantsPages.value
+    }
+  }
+)
 
 const filteredRestaurantsStats = computed(() => {
   const list = restaurants.value || []
@@ -287,19 +336,6 @@ function openEditModal(rest) {
   restaurantForm.is_active = Boolean(rest.is_active)
   photoInputMode.value = rest.photo_url && rest.photo_url.startsWith('http') ? 'url' : 'upload'
   showModal.value = true
-}
-
-function jumpToEditRestaurant(restId) {
-  activeSection.value = 'restaurantes'
-  const found = restaurants.value.find((r) => r.id === restId)
-  if (found) {
-    openEditModal(found)
-  } else {
-    fetchRestaurants().then(() => {
-      const target = restaurants.value.find((r) => r.id === restId)
-      if (target) openEditModal(target)
-    })
-  }
 }
 
 // Compresión automática de foto en Canvas para almacenar limpio en BD
@@ -404,7 +440,7 @@ async function toggleRestaurantStatus(rest) {
     rest.is_active = newStatus
     showToast(`Restaurante "${rest.name}" ${newStatus ? 'activado' : 'desactivado'}.`)
     fetchSummary()
-  } catch (err) {
+  } catch {
     showToast('No se pudo cambiar el estado del restaurante.', 'error')
   }
 }
@@ -421,7 +457,7 @@ async function executeDeleteRestaurant() {
     showToast(`Restaurante "${deleteTarget.value.name}" eliminado.`)
     deleteTarget.value = null
     await Promise.all([fetchRestaurants(), fetchSummary()])
-  } catch (err) {
+  } catch {
     showToast('No se pudo eliminar el restaurante.', 'error')
   } finally {
     deletingRestaurant.value = false
@@ -463,89 +499,172 @@ onMounted(async () => {
 
 <template>
   <div class="admin-layout">
-    <!-- BARRA LATERAL / HEADER DE NAVEGACIÓN -->
+    <!-- ===================================================== -->
+    <!-- BARRA LATERAL DESKTOP (Fija en monitor sin scroll)    -->
+    <!-- ===================================================== -->
     <aside class="admin-sidebar">
-      <div class="sidebar-brand">
-        <div class="brand-logo">R</div>
-        <div>
-          <h1>RODO Admin</h1>
-          <span class="admin-badge">Código #000</span>
+      <div class="sidebar-top">
+        <div class="sidebar-brand">
+          <div class="brand-logo">R</div>
+          <div>
+            <h1>RODO Admin</h1>
+            <span class="admin-badge">Código #000</span>
+          </div>
         </div>
+
+        <nav class="sidebar-nav">
+          <button
+            type="button"
+            :class="['nav-item', { active: activeSection === 'resumen' && summaryTab === 'charts' }]"
+            @click="switchToSection('resumen', 'charts')"
+          >
+            <span class="nav-icon">📊</span>
+            <div class="nav-text">
+              <strong>Resumen Gráfico</strong>
+              <small>KPIs y analítica</small>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            :class="['nav-item', { active: activeSection === 'resumen' && summaryTab === 'orders' }]"
+            @click="switchToSection('resumen', 'orders')"
+          >
+            <span class="nav-icon">🧾</span>
+            <div class="nav-text">
+              <strong>Últimos Pedidos</strong>
+              <small>Historial y tickets</small>
+            </div>
+            <span class="nav-counter">{{ summaryData.recent_orders.length }}</span>
+          </button>
+
+          <button
+            type="button"
+            :class="['nav-item', { active: activeSection === 'restaurantes' }]"
+            @click="switchToSection('restaurantes')"
+          >
+            <span class="nav-icon">🏪</span>
+            <div class="nav-text">
+              <strong>Restaurantes</strong>
+              <small>CRUD, foto y mapa</small>
+            </div>
+            <span class="nav-counter">{{ summaryData.kpis.total_restaurants }}</span>
+          </button>
+        </nav>
       </div>
 
-      <nav class="sidebar-nav">
-        <button
-          type="button"
-          :class="['nav-item', { active: activeSection === 'resumen' }]"
-          @click="activeSection = 'resumen'"
-        >
-          <span class="nav-icon">📊</span>
-          <div class="nav-text">
-            <strong>Resumen</strong>
-            <small>KPIs, filtros y gráficas</small>
-          </div>
-        </button>
-
-        <button
-          type="button"
-          :class="['nav-item', { active: activeSection === 'restaurantes' }]"
-          @click="activeSection = 'restaurantes'"
-        >
-          <span class="nav-icon">🏪</span>
-          <div class="nav-text">
-            <strong>Restaurantes</strong>
-            <small>CRUD, fotos y ubicación</small>
-          </div>
-          <span class="nav-counter">{{ summaryData.kpis.total_restaurants }}</span>
-        </button>
-      </nav>
-
       <div class="sidebar-footer">
+        <button type="button" class="btn-sidebar-new" @click="openCreateModal">
+          ➕ Nuevo Restaurante
+        </button>
         <button type="button" class="btn-logout" @click="logoutAdmin">
-          <span>🚪</span> Cerrar sesión Admin
+          <span>🚪</span> Cerrar sesión
         </button>
       </div>
     </aside>
 
-    <!-- CONTENIDO PRINCIPAL -->
-    <main class="admin-main">
-      <!-- Topbar superior -->
-      <header class="admin-topbar">
+    <!-- ===================================================== -->
+    <!-- HEADER MÓVIL COMPACTO (Visible solo en celular/tablet)-->
+    <!-- ===================================================== -->
+    <header class="mobile-admin-header">
+      <div class="mobile-brand-left">
+        <div class="brand-logo-sm">R</div>
         <div>
-          <h2 v-if="activeSection === 'resumen'">Resumen General de la Plataforma</h2>
+          <strong>RODO Admin</strong>
+          <span class="mobile-code-pill">#000</span>
+        </div>
+      </div>
+      <div class="mobile-header-actions">
+        <button
+          v-if="activeSection === 'resumen'"
+          type="button"
+          class="btn-mobile-icon"
+          :disabled="summaryLoading"
+          title="Actualizar"
+          @click="fetchSummary"
+        >
+          🔄
+        </button>
+        <button
+          type="button"
+          class="btn-mobile-icon"
+          title="Nuevo Restaurante"
+          @click="openCreateModal"
+        >
+          ➕
+        </button>
+        <button
+          type="button"
+          class="btn-mobile-icon btn-mobile-exit"
+          title="Cerrar sesión"
+          @click="logoutAdmin"
+        >
+          🚪
+        </button>
+      </div>
+    </header>
+
+    <!-- ===================================================== -->
+    <!-- ÁREA PRINCIPAL ADAPTADA 100% AL MONITOR               -->
+    <!-- ===================================================== -->
+    <main class="admin-main">
+      <!-- Topbar compacta -->
+      <header class="admin-topbar">
+        <div class="topbar-title-group">
+          <h2 v-if="activeSection === 'resumen'">
+            {{ summaryTab === 'charts' ? 'Resumen General de la Plataforma' : 'Últimos Pedidos Registrados' }}
+          </h2>
           <h2 v-else>Directorio y CRUD de Restaurantes</h2>
-          <p class="topbar-sub">
-            <span v-if="activeSection === 'resumen'">
-              Monitoreo en tiempo real de pedidos, tarifas de envío, zonas de entrega y rendimiento de locales.
-            </span>
-            <span v-else>
-              Enriquece el perfil de cada restaurante registrado añadiendo su foto, ubicación con URL de Google Maps y descripción.
-            </span>
-          </p>
+          <span class="topbar-subtitle-inline">
+            <template v-if="activeSection === 'resumen'">
+              Monitoreo en tiempo real de entregas, tarifas y zonas
+            </template>
+            <template v-else>
+              Gestiona fotos, enlaces de Google Maps y descripciones de cada local
+            </template>
+          </span>
         </div>
 
         <div class="topbar-actions">
+          <!-- Selector rápido de vista en Resumen -->
+          <div v-if="activeSection === 'resumen'" class="view-mode-pills">
+            <button
+              type="button"
+              :class="['mode-pill', { active: summaryTab === 'charts' }]"
+              @click="summaryTab = 'charts'"
+            >
+              📊 Gráficas
+            </button>
+            <button
+              type="button"
+              :class="['mode-pill', { active: summaryTab === 'orders' }]"
+              @click="summaryTab = 'orders'"
+            >
+              🧾 Pedidos ({{ summaryData.recent_orders.length }})
+            </button>
+          </div>
+
           <button
             v-if="activeSection === 'resumen'"
             type="button"
-            class="btn-secondary"
+            class="btn-secondary btn-compact"
             @click="exportRecentOrdersCsv"
           >
-            📥 Exportar CSV
+            📥 CSV
           </button>
           <button
             v-if="activeSection === 'resumen'"
             type="button"
-            class="btn-primary"
+            class="btn-primary btn-compact"
             :disabled="summaryLoading"
             @click="fetchSummary"
           >
-            {{ summaryLoading ? 'Actualizando...' : '🔄 Actualizar datos' }}
+            {{ summaryLoading ? 'Cargando...' : '🔄 Actualizar' }}
           </button>
           <button
             v-if="activeSection === 'restaurantes'"
             type="button"
-            class="btn-primary"
+            class="btn-primary btn-compact"
             @click="openCreateModal"
           >
             ➕ Nuevo Restaurante
@@ -554,475 +673,450 @@ onMounted(async () => {
       </header>
 
       <!-- ===================================================== -->
-      <!-- VISTA 1: RESUMEN (FILTROS, KPIS Y GRÁFICAS DINÁMICAS) -->
+      <!-- SECCIÓN 1: RESUMEN (100% MONITOR SIN SCROLL)          -->
       <!-- ===================================================== -->
-      <section v-if="activeSection === 'resumen'" class="section-container">
-        <!-- Barra de Filtros Dinámicos -->
-        <div class="filters-card">
-          <div class="filter-group period-pills">
-            <span class="filter-label">Periodo:</span>
-            <div class="pills-row">
-              <button
-                type="button"
-                :class="['pill-btn', { active: filters.period === 'today' }]"
-                @click="selectPeriod('today')"
-              >
-                Hoy
-              </button>
-              <button
-                type="button"
-                :class="['pill-btn', { active: filters.period === '7d' }]"
-                @click="selectPeriod('7d')"
-              >
-                7 días
-              </button>
-              <button
-                type="button"
-                :class="['pill-btn', { active: filters.period === '30d' }]"
-                @click="selectPeriod('30d')"
-              >
-                30 días
-              </button>
-              <button
-                type="button"
-                :class="['pill-btn', { active: filters.period === 'month' }]"
-                @click="selectPeriod('month')"
-              >
-                Este mes
-              </button>
-              <button
-                type="button"
-                :class="['pill-btn', { active: filters.period === 'all' }]"
-                @click="selectPeriod('all')"
-              >
-                Todo
-              </button>
-              <button
-                type="button"
-                :class="['pill-btn', { active: filters.period === 'custom' }]"
-                @click="selectPeriod('custom')"
-              >
-                📅 Personalizado
-              </button>
-            </div>
+      <section v-if="activeSection === 'resumen'" class="monitor-section">
+        <!-- Barra horizontal compacta de filtros -->
+        <div class="filters-strip">
+          <div class="pills-scroll-row">
+            <span class="filter-tag">Periodo:</span>
+            <button
+              type="button"
+              :class="['pill-btn', { active: filters.period === 'today' }]"
+              @click="selectPeriod('today')"
+            >
+              Hoy
+            </button>
+            <button
+              type="button"
+              :class="['pill-btn', { active: filters.period === '7d' }]"
+              @click="selectPeriod('7d')"
+            >
+              7 días
+            </button>
+            <button
+              type="button"
+              :class="['pill-btn', { active: filters.period === '30d' }]"
+              @click="selectPeriod('30d')"
+            >
+              30 días
+            </button>
+            <button
+              type="button"
+              :class="['pill-btn', { active: filters.period === 'month' }]"
+              @click="selectPeriod('month')"
+            >
+              Mes
+            </button>
+            <button
+              type="button"
+              :class="['pill-btn', { active: filters.period === 'all' }]"
+              @click="selectPeriod('all')"
+            >
+              Todo
+            </button>
+            <button
+              type="button"
+              :class="['pill-btn', { active: filters.period === 'custom' }]"
+              @click="selectPeriod('custom')"
+            >
+              📅 Rango
+            </button>
           </div>
 
-          <!-- Fechas personalizadas -->
-          <div v-if="filters.period === 'custom'" class="custom-dates-row">
-            <div class="filter-input-box">
-              <label>Desde:</label>
-              <input v-model="filters.date_from" type="date" @change="fetchSummary" />
-            </div>
-            <div class="filter-input-box">
-              <label>Hasta:</label>
-              <input v-model="filters.date_to" type="date" @change="fetchSummary" />
-            </div>
+          <div v-if="filters.period === 'custom'" class="custom-dates-inline">
+            <input v-model="filters.date_from" type="date" aria-label="Desde" @change="fetchSummary" />
+            <span>a</span>
+            <input v-model="filters.date_to" type="date" aria-label="Hasta" @change="fetchSummary" />
           </div>
 
-          <div class="filters-selects-row">
-            <div class="filter-select-item">
-              <label>🏪 Filtrar por Restaurante:</label>
-              <select v-model="filters.restaurant_id" @change="fetchSummary">
-                <option value="all">Todos los restaurantes ({{ summaryData.restaurants_list.length }})</option>
-                <option
-                  v-for="r in summaryData.restaurants_list"
-                  :key="r.id"
-                  :value="r.id"
-                >
-                  {{ r.name }} (#{{ r.code }})
-                </option>
-              </select>
-            </div>
+          <div class="filters-selects-inline">
+            <select v-model="filters.restaurant_id" aria-label="Filtrar por restaurante" @change="fetchSummary">
+              <option value="all">🏪 Todos los locales ({{ summaryData.restaurants_list.length }})</option>
+              <option v-for="r in summaryData.restaurants_list" :key="r.id" :value="r.id">
+                {{ r.name }} (#{{ r.code }})
+              </option>
+            </select>
 
-            <div class="filter-select-item">
-              <label>💳 Método de Pago:</label>
-              <select v-model="filters.payment_method" @change="fetchSummary">
-                <option value="all">Todos los métodos</option>
-                <option value="Efectivo">Efectivo</option>
-                <option value="Transferencia">Transferencia</option>
-                <option value="Pagado">Ya pagado / Tarjeta</option>
-              </select>
-            </div>
+            <select v-model="filters.payment_method" aria-label="Filtrar por método de pago" @change="fetchSummary">
+              <option value="all">💳 Todos los pagos</option>
+              <option value="Efectivo">Efectivo</option>
+              <option value="Transferencia">Transferencia</option>
+              <option value="Pagado">Ya pagado / Tarjeta</option>
+            </select>
           </div>
         </div>
 
-        <!-- TARJETAS DE KPIS DINÁMICOS -->
-        <div class="kpis-grid">
-          <!-- KPI 1: Total Pedidos -->
+        <!-- 6 KPIS EN UNA SOLA FILA EN MONITOR (2 COLUMNAS EN MÓVIL) -->
+        <div class="kpis-row">
           <div class="kpi-card kpi-red">
             <div class="kpi-top">
               <span class="kpi-icon">📦</span>
-              <span
-                :class="['kpi-trend', summaryData.kpis.orders_growth_pct >= 0 ? 'trend-up' : 'trend-down']"
-              >
-                {{ summaryData.kpis.orders_growth_pct >= 0 ? '▲' : '▼' }}
-                {{ Math.abs(summaryData.kpis.orders_growth_pct) }}%
+              <span :class="['kpi-trend', summaryData.kpis.orders_growth_pct >= 0 ? 'trend-up' : 'trend-down']">
+                {{ summaryData.kpis.orders_growth_pct >= 0 ? '▲' : '▼' }}{{ Math.abs(summaryData.kpis.orders_growth_pct) }}%
               </span>
             </div>
             <div class="kpi-value">{{ summaryData.kpis.total_orders }}</div>
             <div class="kpi-title">Pedidos Registrados</div>
             <div class="kpi-sub">
-              ✓ {{ summaryData.kpis.orders_ready_count }} listos · {{ summaryData.kpis.orders_needing_change }} requirieron cambio
+              ✓ {{ summaryData.kpis.orders_ready_count }} listos · {{ summaryData.kpis.orders_needing_change }} con cambio
             </div>
           </div>
 
-          <!-- KPI 2: Tarifas de Envío Generadas -->
           <div class="kpi-card kpi-emerald">
             <div class="kpi-top">
               <span class="kpi-icon">🛵</span>
-              <span
-                :class="['kpi-trend', summaryData.kpis.fees_growth_pct >= 0 ? 'trend-up' : 'trend-down']"
-              >
-                {{ summaryData.kpis.fees_growth_pct >= 0 ? '▲' : '▼' }}
-                {{ Math.abs(summaryData.kpis.fees_growth_pct) }}%
+              <span :class="['kpi-trend', summaryData.kpis.fees_growth_pct >= 0 ? 'trend-up' : 'trend-down']">
+                {{ summaryData.kpis.fees_growth_pct >= 0 ? '▲' : '▼' }}{{ Math.abs(summaryData.kpis.fees_growth_pct) }}%
               </span>
             </div>
             <div class="kpi-value">{{ formatCurrency(summaryData.kpis.total_delivery_fees) }}</div>
-            <div class="kpi-title">Ingresos en Tarifas de Envío</div>
+            <div class="kpi-title">Ingresos en Tarifas</div>
             <div class="kpi-sub">
-              Tarifa promedio: <strong>{{ formatCurrency(summaryData.kpis.avg_delivery_fee) }}</strong> / entrega
+              Prom: <strong>{{ formatCurrency(summaryData.kpis.avg_delivery_fee) }}</strong> / envío
             </div>
           </div>
 
-          <!-- KPI 3: Volumen a Cobrar -->
           <div class="kpi-card kpi-blue">
             <div class="kpi-top">
               <span class="kpi-icon">💵</span>
-              <span class="kpi-badge-neutral">Flujo en calle</span>
+              <span class="kpi-badge-neutral">Flujo calle</span>
             </div>
             <div class="kpi-value">{{ formatCurrency(summaryData.kpis.total_collected) }}</div>
-            <div class="kpi-title">Monto Movilizado en Cobros</div>
+            <div class="kpi-title">Monto en Cobros</div>
             <div class="kpi-sub">
-              Ticket promedio a cobrar: <strong>{{ formatCurrency(summaryData.kpis.avg_ticket_collect) }}</strong>
+              Ticket prom: <strong>{{ formatCurrency(summaryData.kpis.avg_ticket_collect) }}</strong>
             </div>
           </div>
 
-          <!-- KPI 4: Restaurantes Activos y Perfiles -->
-          <div class="kpi-card kpi-purple" style="cursor: pointer;" @click="activeSection = 'restaurantes'">
+          <div class="kpi-card kpi-purple" style="cursor: pointer;" @click="switchToSection('restaurantes')">
             <div class="kpi-top">
               <span class="kpi-icon">🏪</span>
-              <span class="kpi-badge-neutral">{{ summaryData.kpis.restaurants_with_orders }} con pedidos</span>
+              <span class="kpi-badge-neutral">{{ summaryData.kpis.restaurants_with_orders }} activos</span>
             </div>
             <div class="kpi-value">
               {{ summaryData.kpis.active_restaurants }}
-              <small style="font-size: 1rem; color: #64748b; font-weight: 600;">/ {{ summaryData.kpis.total_restaurants }}</small>
+              <small class="kpi-fraction">/ {{ summaryData.kpis.total_restaurants }}</small>
             </div>
-            <div class="kpi-title">Restaurantes Activos</div>
+            <div class="kpi-title">Locales Registrados</div>
             <div class="kpi-sub">
-              ✨ {{ summaryData.kpis.restaurants_with_complete_profile }} con foto, mapa y descripción
+              ✨ {{ summaryData.kpis.restaurants_with_complete_profile }} con perfil completo
             </div>
           </div>
 
-          <!-- KPI 5: Distancia Recorrida -->
           <div class="kpi-card kpi-amber">
             <div class="kpi-top">
               <span class="kpi-icon">📍</span>
-              <span class="kpi-badge-neutral">Cobertura hasta 5 km</span>
+              <span class="kpi-badge-neutral">Radio ≤ 5km</span>
             </div>
-            <div class="kpi-value">{{ summaryData.kpis.total_distance_km }} <small style="font-size: 1rem;">km</small></div>
-            <div class="kpi-title">Kilómetros Totales de Ruta</div>
+            <div class="kpi-value">
+              {{ summaryData.kpis.total_distance_km }} <small class="kpi-fraction">km</small>
+            </div>
+            <div class="kpi-title">Kilómetros de Ruta</div>
             <div class="kpi-sub">
-              Distancia promedio: <strong>{{ summaryData.kpis.avg_distance_km }} km</strong> por pedido
+              Prom: <strong>{{ summaryData.kpis.avg_distance_km }} km</strong> / entrega
             </div>
           </div>
 
-          <!-- KPI 6: Solicitudes Masivas de Repartidores -->
           <div class="kpi-card kpi-slate">
             <div class="kpi-top">
               <span class="kpi-icon">⚡</span>
-              <span class="kpi-badge-neutral">Apoyo en flotilla</span>
+              <span class="kpi-badge-neutral">Apoyo líder</span>
             </div>
             <div class="kpi-value">{{ summaryData.kpis.total_riders_requested }}</div>
-            <div class="kpi-title">Repartidores Solicitados</div>
+            <div class="kpi-title">Motos Solicitadas</div>
             <div class="kpi-sub">
-              En <strong>{{ summaryData.kpis.total_rider_requests }}</strong> solicitudes rápidas al líder
+              En <strong>{{ summaryData.kpis.total_rider_requests }}</strong> alertas rápidas
             </div>
           </div>
         </div>
 
-        <!-- GRÁFICAS PRINCIPALES (FILA 1) -->
-        <div class="charts-grid-two">
-          <!-- Gráfica 1: Tendencia Diaria de Pedidos y Tarifas -->
-          <div class="chart-card chart-wide">
-            <div class="chart-header">
-              <div>
-                <h3>📈 Evolución de Actividad Diaria</h3>
-                <p>Comportamiento diario de órdenes y tarifas generadas en el periodo</p>
+        <!-- SUB-VISTA A: BENTO GRID DE GRÁFICAS (CABE 100% EN EL MONITOR) -->
+        <div v-if="summaryTab === 'charts'" class="bento-charts-workspace">
+          <!-- FILA SUPERIOR DE GRÁFICAS -->
+          <div class="bento-row-top">
+            <!-- Gráfica 1: Tendencia Diaria -->
+            <div class="chart-card">
+              <div class="chart-header">
+                <div>
+                  <h3>📈 Evolución de Actividad Diaria</h3>
+                  <p>Órdenes y tarifas generadas por día</p>
+                </div>
+                <div class="chart-toggle">
+                  <button
+                    type="button"
+                    :class="['toggle-btn', { active: chartMetric === 'orders' }]"
+                    @click="chartMetric = 'orders'"
+                  >
+                    📦 Pedidos
+                  </button>
+                  <button
+                    type="button"
+                    :class="['toggle-btn', { active: chartMetric === 'fees' }]"
+                    @click="chartMetric = 'fees'"
+                  >
+                    💵 Tarifas
+                  </button>
+                </div>
               </div>
-              <div class="chart-toggle">
-                <button
-                  type="button"
-                  :class="['toggle-btn', { active: chartMetric === 'orders' }]"
-                  @click="chartMetric = 'orders'"
-                >
-                  📦 Pedidos
-                </button>
-                <button
-                  type="button"
-                  :class="['toggle-btn', { active: chartMetric === 'fees' }]"
-                  @click="chartMetric = 'fees'"
-                >
-                  💵 Tarifas ($)
-                </button>
+
+              <div v-if="summaryData.charts.daily_trend.length" class="bar-chart-wrapper">
+                <div class="bar-chart-columns">
+                  <div
+                    v-for="day in summaryData.charts.daily_trend"
+                    :key="day.date"
+                    class="bar-col-item"
+                    :title="`${day.date}: ${day.orders_count} pedidos | ${formatCurrency(day.delivery_fees)}`"
+                  >
+                    <span class="bar-top-val">
+                      {{
+                        chartMetric === 'orders'
+                          ? day.orders_count || ''
+                          : day.delivery_fees > 0
+                            ? '$' + Math.round(day.delivery_fees)
+                            : ''
+                      }}
+                    </span>
+                    <div class="bar-track">
+                      <div
+                        class="bar-fill"
+                        :class="chartMetric === 'fees' ? 'fill-emerald' : 'fill-red'"
+                        :style="{
+                          height:
+                            Math.max(
+                              ((chartMetric === 'orders' ? day.orders_count : day.delivery_fees) /
+                                maxDailyValue) *
+                                100,
+                              (chartMetric === 'orders' ? day.orders_count : day.delivery_fees) > 0 ? 8 : 2
+                            ) + '%',
+                        }"
+                      />
+                    </div>
+                    <span class="bar-label">{{ day.label }}</span>
+                  </div>
+                </div>
               </div>
+              <div v-else class="empty-chart">Sin registros en este rango de fechas.</div>
             </div>
 
-            <div v-if="summaryData.charts.daily_trend.length" class="bar-chart-wrapper">
-              <div class="bar-chart-columns">
+            <!-- Gráfica 2: Dona de Métodos de Pago (Horizontal para encajar en monitor) -->
+            <div class="chart-card">
+              <div class="chart-header">
+                <div>
+                  <h3>💳 Métodos de Pago</h3>
+                  <p>Distribución de cobros en entregas</p>
+                </div>
+              </div>
+
+              <div v-if="paymentDonutSegments.length" class="donut-horizontal-layout">
+                <div class="donut-svg-box">
+                  <svg viewBox="0 0 42 42" class="donut-svg">
+                    <circle
+                      cx="21"
+                      cy="21"
+                      r="15.91549430918954"
+                      fill="transparent"
+                      stroke="#f1f5f9"
+                      stroke-width="5.5"
+                    />
+                    <circle
+                      v-for="seg in paymentDonutSegments"
+                      :key="seg.method"
+                      cx="21"
+                      cy="21"
+                      r="15.91549430918954"
+                      fill="transparent"
+                      :stroke="seg.color"
+                      stroke-width="5.5"
+                      :stroke-dasharray="seg.strokeDasharray"
+                      :stroke-dashoffset="seg.strokeDashoffset"
+                      stroke-linecap="butt"
+                    />
+                  </svg>
+                  <div class="donut-center">
+                    <strong>{{ summaryData.kpis.total_orders }}</strong>
+                    <span>Pedidos</span>
+                  </div>
+                </div>
+
+                <div class="donut-legend">
+                  <div v-for="seg in paymentDonutSegments" :key="seg.method" class="legend-row">
+                    <div class="legend-left">
+                      <span class="legend-dot" :style="{ background: seg.color }" />
+                      <strong>{{ seg.method }}</strong>
+                    </div>
+                    <div class="legend-right">
+                      <span class="legend-count">{{ seg.count }} ({{ seg.percentage }}%)</span>
+                      <small>{{ formatCurrency(seg.total_collected) }}</small>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="empty-chart">Sin datos de métodos de pago.</div>
+            </div>
+          </div>
+
+          <!-- FILA INFERIOR DE GRÁFICAS (3 COLUMNAS EN MONITOR) -->
+          <div class="bento-row-bottom">
+            <!-- Gráfica 3: Top Restaurantes -->
+            <div class="chart-card">
+              <div class="chart-header">
+                <div>
+                  <h3>🏆 Top Restaurantes Activos</h3>
+                  <p>Mayor volumen de envíos y tarifas</p>
+                </div>
+              </div>
+
+              <div v-if="summaryData.charts.top_restaurants.length" class="ranking-list">
                 <div
-                  v-for="day in summaryData.charts.daily_trend"
-                  :key="day.date"
-                  class="bar-col-item"
-                  :title="`${day.date}: ${day.orders_count} pedidos | ${formatCurrency(day.delivery_fees)} en tarifas`"
+                  v-for="(rest, idx) in summaryData.charts.top_restaurants.slice(0, 4)"
+                  :key="rest.id"
+                  class="ranking-item"
                 >
-                  <span class="bar-top-val">
-                    {{
-                      chartMetric === 'orders'
-                        ? day.orders_count || ''
-                        : day.delivery_fees > 0
-                          ? '$' + Math.round(day.delivery_fees)
-                          : ''
-                    }}
-                  </span>
-                  <div class="bar-track">
+                  <div class="ranking-top">
+                    <div class="ranking-identity">
+                      <span class="rank-num">#{{ idx + 1 }}</span>
+                      <img v-if="rest.photo_url" :src="rest.photo_url" alt="Logo" class="rank-avatar" />
+                      <div v-else class="rank-avatar-placeholder">
+                        {{ rest.name.charAt(0).toUpperCase() }}
+                      </div>
+                      <div class="rank-text-box">
+                        <strong class="rank-name">{{ rest.name }}</strong>
+                        <small class="rank-code">#{{ rest.code }} · {{ rest.avg_distance }} km prom.</small>
+                      </div>
+                    </div>
+                    <div class="ranking-metrics">
+                      <span class="rank-orders">{{ rest.orders_count }} ped.</span>
+                      <strong class="rank-fees">{{ formatCurrency(rest.delivery_fees) }}</strong>
+                    </div>
+                  </div>
+                  <div class="ranking-bar-bg">
                     <div
-                      class="bar-fill"
-                      :class="chartMetric === 'fees' ? 'fill-emerald' : 'fill-red'"
+                      class="ranking-bar-fill"
+                      :style="{ width: Math.max((rest.orders_count / maxTopRestaurantOrders) * 100, 6) + '%' }"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div v-else class="empty-chart">Sin pedidos por restaurante en este filtro.</div>
+            </div>
+
+            <!-- Gráfica 4: Horas Pico + Rangos de Distancia -->
+            <div class="chart-card">
+              <div class="chart-header">
+                <div>
+                  <h3>⏰ Demanda por Hora y Distancia</h3>
+                  <p>
+                    Flujo horario
+                    <strong v-if="peakHourObj" style="color: #d71920;">
+                      · Pico: {{ peakHourObj.label }} ({{ peakHourObj.orders_count }} ped.)
+                    </strong>
+                  </p>
+                </div>
+              </div>
+
+              <div class="hourly-chart">
+                <div
+                  v-for="h in summaryData.charts.hourly_distribution"
+                  :key="h.hour"
+                  class="hour-col"
+                  :title="`${h.label} hrs: ${h.orders_count} pedidos`"
+                >
+                  <span class="hour-val">{{ h.orders_count > 0 ? h.orders_count : '' }}</span>
+                  <div class="hour-track">
+                    <div
+                      :class="[
+                        'hour-fill',
+                        peakHourObj && peakHourObj.hour === h.hour && h.orders_count > 0 ? 'hour-peak' : '',
+                      ]"
                       :style="{
                         height:
-                          Math.max(
-                            ((chartMetric === 'orders' ? day.orders_count : day.delivery_fees) /
-                              maxDailyValue) *
-                              100,
-                            (chartMetric === 'orders' ? day.orders_count : day.delivery_fees) > 0 ? 8 : 2
-                          ) + '%',
+                          Math.max((h.orders_count / maxHourlyCount) * 100, h.orders_count > 0 ? 10 : 3) + '%',
                       }"
                     />
                   </div>
-                  <span class="bar-label">{{ day.label }}</span>
-                </div>
-              </div>
-            </div>
-            <div v-else class="empty-chart">Sin registros en este rango de fechas.</div>
-          </div>
-
-          <!-- Gráfica 2: Dona de Métodos de Pago -->
-          <div class="chart-card">
-            <div class="chart-header">
-              <div>
-                <h3>💳 Métodos de Pago</h3>
-                <p>Proporción de cobros y liquidez en entregas</p>
-              </div>
-            </div>
-
-            <div v-if="paymentDonutSegments.length" class="donut-layout">
-              <div class="donut-svg-box">
-                <svg viewBox="0 0 42 42" class="donut-svg">
-                  <circle
-                    cx="21"
-                    cy="21"
-                    r="15.91549430918954"
-                    fill="transparent"
-                    stroke="#f1f5f9"
-                    stroke-width="5.5"
-                  />
-                  <circle
-                    v-for="seg in paymentDonutSegments"
-                    :key="seg.method"
-                    cx="21"
-                    cy="21"
-                    r="15.91549430918954"
-                    fill="transparent"
-                    :stroke="seg.color"
-                    stroke-width="5.5"
-                    :stroke-dasharray="seg.strokeDasharray"
-                    :stroke-dashoffset="seg.strokeDashoffset"
-                    stroke-linecap="butt"
-                  />
-                </svg>
-                <div class="donut-center">
-                  <strong>{{ summaryData.kpis.total_orders }}</strong>
-                  <span>Pedidos</span>
+                  <span class="hour-label">{{ h.hour }}h</span>
                 </div>
               </div>
 
-              <div class="donut-legend">
-                <div
-                  v-for="seg in paymentDonutSegments"
-                  :key="seg.method"
-                  class="legend-row"
-                >
-                  <div class="legend-left">
-                    <span class="legend-dot" :style="{ background: seg.color }" />
-                    <strong>{{ seg.method }}</strong>
-                  </div>
-                  <div class="legend-right">
-                    <span class="legend-count">{{ seg.count }} ({{ seg.percentage }}%)</span>
-                    <small>{{ formatCurrency(seg.total_collected) }}</small>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div v-else class="empty-chart">Sin datos de métodos de pago.</div>
-          </div>
-        </div>
-
-        <!-- GRÁFICAS SECUNDARIAS (FILA 2) -->
-        <div class="charts-grid-three">
-          <!-- Gráfica 3: Top Restaurantes -->
-          <div class="chart-card">
-            <div class="chart-header">
-              <div>
-                <h3>🏆 Top Restaurantes Activos</h3>
-                <p>Locales con mayor volumen de envíos y tarifas</p>
-              </div>
-            </div>
-
-            <div v-if="summaryData.charts.top_restaurants.length" class="ranking-list">
-              <div
-                v-for="(rest, idx) in summaryData.charts.top_restaurants"
-                :key="rest.id"
-                class="ranking-item"
-              >
-                <div class="ranking-top">
-                  <div class="ranking-identity">
-                    <span class="rank-num">#{{ idx + 1 }}</span>
-                    <img
-                      v-if="rest.photo_url"
-                      :src="rest.photo_url"
-                      alt="Logo"
-                      class="rank-avatar"
-                    />
-                    <div v-else class="rank-avatar-placeholder">
-                      {{ rest.name.charAt(0).toUpperCase() }}
-                    </div>
-                    <div>
-                      <strong class="rank-name">{{ rest.name }}</strong>
-                      <small class="rank-code">Código #{{ rest.code }} · Prom. {{ rest.avg_distance }} km</small>
-                    </div>
-                  </div>
-                  <div class="ranking-metrics">
-                    <span class="rank-orders">{{ rest.orders_count }} ped.</span>
-                    <strong class="rank-fees">{{ formatCurrency(rest.delivery_fees) }}</strong>
-                  </div>
-                </div>
-                <div class="ranking-bar-bg">
-                  <div
-                    class="ranking-bar-fill"
-                    :style="{ width: Math.max((rest.orders_count / maxTopRestaurantOrders) * 100, 6) + '%' }"
-                  />
-                </div>
-              </div>
-            </div>
-            <div v-else class="empty-chart">Aún no hay pedidos por restaurante en este filtro.</div>
-          </div>
-
-          <!-- Gráfica 4: Horas Pico de Demanda -->
-          <div class="chart-card">
-            <div class="chart-header">
-              <div>
-                <h3>⏰ Demanda por Hora (Horas Pico)</h3>
-                <p>
-                  Distribución horaria para coordinar repartidores
-                  <strong v-if="peakHourObj" style="color: #d71920;">
-                    · Pico: {{ peakHourObj.label }} ({{ peakHourObj.orders_count }} ped.)
-                  </strong>
-                </p>
-              </div>
-            </div>
-
-            <div class="hourly-chart">
-              <div
-                v-for="h in summaryData.charts.hourly_distribution"
-                :key="h.hour"
-                class="hour-col"
-                :title="`${h.label} hrs: ${h.orders_count} pedidos`"
-              >
-                <span class="hour-val">{{ h.orders_count > 0 ? h.orders_count : '' }}</span>
-                <div class="hour-track">
-                  <div
-                    :class="[
-                      'hour-fill',
-                      peakHourObj && peakHourObj.hour === h.hour && h.orders_count > 0 ? 'hour-peak' : '',
-                    ]"
-                    :style="{
-                      height:
-                        Math.max((h.orders_count / maxHourlyCount) * 100, h.orders_count > 0 ? 10 : 3) + '%',
-                    }"
-                  />
-                </div>
-                <span class="hour-label">{{ h.hour }}h</span>
-              </div>
-            </div>
-
-            <!-- Distribución por rangos de distancia -->
-            <div class="distance-ranges-box">
-              <h4>📏 Distribución por Distancia de Entrega</h4>
-              <div class="distance-bars">
+              <div class="distance-pills-strip">
                 <div
                   v-for="dr in summaryData.charts.distance_ranges"
                   :key="dr.range"
-                  class="dist-row"
+                  class="dist-mini-pill"
                 >
-                  <div class="dist-info">
-                    <span>{{ dr.range }}</span>
-                    <strong>{{ dr.count }} ped. ({{ dr.percentage }}%) · {{ formatCurrency(dr.total_fees) }}</strong>
-                  </div>
-                  <div class="dist-progress-bg">
-                    <div class="dist-progress-fill" :style="{ width: Math.max(dr.percentage, 3) + '%' }" />
-                  </div>
+                  <span class="dist-range-lbl">{{ dr.range }}</span>
+                  <strong>{{ dr.count }} ({{ dr.percentage }}%)</strong>
                 </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Gráfica 5: Zonas / Colonias con Mayor Demanda -->
-          <div class="chart-card">
-            <div class="chart-header">
-              <div>
-                <h3>🗺️ Top Colonias de Entrega</h3>
-                <p>Zonas con mayor concentración de envíos</p>
               </div>
             </div>
 
-            <div v-if="summaryData.charts.top_neighborhoods.length" class="zones-list">
-              <div
-                v-for="(zone, idx) in summaryData.charts.top_neighborhoods"
-                :key="zone.neighborhood"
-                class="zone-item"
-              >
-                <div class="zone-header">
-                  <div>
-                    <span class="zone-badge">{{ idx + 1 }}</span>
-                    <strong>{{ zone.neighborhood }}</strong>
-                  </div>
-                  <span class="zone-stats">
-                    {{ zone.orders_count }} envíos ({{ zone.percentage }}%)
-                  </span>
-                </div>
-                <div class="zone-sub">
-                  <span>Distancia prom: {{ zone.avg_distance }} km</span>
-                  <span>Tarifas: {{ formatCurrency(zone.total_fees) }}</span>
-                </div>
-                <div class="zone-bar-bg">
-                  <div class="zone-bar-fill" :style="{ width: Math.max(zone.percentage, 5) + '%' }" />
+            <!-- Gráfica 5: Top Colonias -->
+            <div class="chart-card">
+              <div class="chart-header">
+                <div>
+                  <h3>🗺️ Top Colonias de Entrega</h3>
+                  <p>Zonas con mayor concentración de envíos</p>
                 </div>
               </div>
+
+              <div v-if="summaryData.charts.top_neighborhoods.length" class="zones-list">
+                <div
+                  v-for="(zone, idx) in summaryData.charts.top_neighborhoods.slice(0, 4)"
+                  :key="zone.neighborhood"
+                  class="zone-item"
+                >
+                  <div class="zone-header">
+                    <div class="zone-title-wrap">
+                      <span class="zone-badge">{{ idx + 1 }}</span>
+                      <strong>{{ zone.neighborhood }}</strong>
+                    </div>
+                    <span class="zone-stats">{{ zone.orders_count }} ({{ zone.percentage }}%)</span>
+                  </div>
+                  <div class="zone-sub">
+                    <span>Prom: {{ zone.avg_distance }} km</span>
+                    <span>{{ formatCurrency(zone.total_fees) }}</span>
+                  </div>
+                  <div class="zone-bar-bg">
+                    <div class="zone-bar-fill" :style="{ width: Math.max(zone.percentage, 5) + '%' }" />
+                  </div>
+                </div>
+              </div>
+              <div v-else class="empty-chart">Sin registros de colonias en este periodo.</div>
             </div>
-            <div v-else class="empty-chart">Sin registros de colonias en este periodo.</div>
           </div>
         </div>
 
-        <!-- TABLA DE PEDIDOS RECIENTES -->
-        <div class="table-card">
-          <div class="table-header">
+        <!-- SUB-VISTA B: TABLA PAGINADA DE ÚLTIMOS PEDIDOS (SIN SCROLL EN MONITOR) -->
+        <div v-else class="orders-workspace-card">
+          <div class="table-header-row">
             <div>
-              <h3>🧾 Últimos Pedidos Registrados</h3>
-              <p>Vista rápida de las entregas más recientes con acceso a su ticket digital</p>
+              <h3>🧾 Historial Reciente de Entregas</h3>
+              <p>Consulta rápida de folios, tarifas y enlace directo al ticket digital</p>
+            </div>
+            <div v-if="totalOrdersPages > 1" class="pagination-controls">
+              <button
+                type="button"
+                class="page-btn"
+                :disabled="ordersPage <= 1"
+                @click="ordersPage--"
+              >
+                ◀ Anterior
+              </button>
+              <span class="page-indicator">Página {{ ordersPage }} de {{ totalOrdersPages }}</span>
+              <button
+                type="button"
+                class="page-btn"
+                :disabled="ordersPage >= totalOrdersPages"
+                @click="ordersPage++"
+              >
+                Siguiente ▶
+              </button>
             </div>
           </div>
 
-          <div v-if="summaryData.recent_orders.length" class="table-responsive">
+          <!-- Vista Tabla para Monitor/Tablet -->
+          <div v-if="paginatedRecentOrders.length" class="table-desktop-wrap">
             <table class="admin-table">
               <thead>
                 <tr>
@@ -1037,7 +1131,7 @@ onMounted(async () => {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="order in summaryData.recent_orders" :key="order.id">
+                <tr v-for="order in paginatedRecentOrders" :key="order.id">
                   <td>
                     <span class="folio-pill">{{ order.folio }}</span>
                   </td>
@@ -1072,112 +1166,145 @@ onMounted(async () => {
                       target="_blank"
                       class="btn-table-link"
                     >
-                      👁️ Ver ticket
+                      👁️ Ticket
                     </router-link>
                   </td>
                 </tr>
               </tbody>
             </table>
           </div>
-          <div v-else class="empty-chart">No hay pedidos registrados para los filtros seleccionados.</div>
+
+          <!-- Tarjetas de Pedidos para Móvil (100% Responsivas sin tabla ancha) -->
+          <div v-if="summaryData.recent_orders.length" class="mobile-orders-list">
+            <div v-for="order in summaryData.recent_orders" :key="'mob-' + order.id" class="mobile-order-card">
+              <div class="mob-order-top">
+                <span class="folio-pill">{{ order.folio }}</span>
+                <span class="mob-order-date">{{ formatDateShort(order.created_at) }}</span>
+              </div>
+              <div class="mob-order-rest">
+                🏪 <strong>{{ order.restaurant?.name }}</strong>
+                <small>(#{{ order.restaurant?.code }})</small>
+              </div>
+              <div class="mob-order-dest">
+                📍 {{ order.customer_name }} · {{ order.neighborhood }} ({{ order.distance_km }} km)
+              </div>
+              <div class="mob-order-bottom">
+                <div>
+                  <strong class="mob-fee">{{ formatCurrency(order.delivery_fee) }}</strong>
+                  <small class="mob-pay">
+                    · {{ order.payment_method }}
+                    <template v-if="order.amount_to_collect">
+                      (Cobrar {{ formatCurrency(order.amount_to_collect) }})
+                    </template>
+                  </small>
+                </div>
+                <router-link :to="`/ticket/${order.public_token}`" target="_blank" class="btn-table-link">
+                  👁️ Ver Ticket
+                </router-link>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="!summaryData.recent_orders.length" class="empty-chart">
+            No hay pedidos registrados para los filtros seleccionados.
+          </div>
         </div>
       </section>
 
       <!-- ===================================================== -->
-      <!-- VISTA 2: CRUD DE RESTAURANTES (FOTO, UBICACIÓN, DESC) -->
+      <!-- SECCIÓN 2: CRUD DE RESTAURANTES (ADAPTADO AL MONITOR) -->
       <!-- ===================================================== -->
-      <section v-else class="section-container">
-        <!-- Mini resumen del directorio -->
-        <div class="crud-stats-bar">
-          <div class="crud-stat-pill">
-            <span>Total registrados:</span>
-            <strong>{{ filteredRestaurantsStats.total }}</strong>
-          </div>
-          <div class="crud-stat-pill stat-green">
-            <span>Activos:</span>
-            <strong>{{ filteredRestaurantsStats.active }}</strong>
-          </div>
-          <div class="crud-stat-pill stat-blue">
-            <span>Perfil completo (Foto + Mapa + Desc):</span>
-            <strong>{{ filteredRestaurantsStats.complete }}</strong>
-          </div>
-          <div class="crud-stat-pill stat-amber">
-            <span>Por completar:</span>
-            <strong>{{ filteredRestaurantsStats.incomplete }}</strong>
-          </div>
-        </div>
-
-        <!-- Barra de búsqueda y filtros del CRUD -->
-        <div class="filters-card crud-toolbar">
-          <div class="search-box">
-            <span class="search-icon">🔍</span>
-            <input
-              v-model="restaurantFilters.search"
-              type="text"
-              placeholder="Buscar por nombre del restaurante o código de 3 dígitos (ej. 609)..."
-              @input="fetchRestaurants"
-            />
+      <section v-else class="monitor-section">
+        <!-- Barra unificada de estadísticas y búsqueda del CRUD -->
+        <div class="crud-header-bar">
+          <div class="crud-stats-pills">
+            <div class="crud-stat-pill">
+              <span>Total:</span>
+              <strong>{{ filteredRestaurantsStats.total }}</strong>
+            </div>
+            <div class="crud-stat-pill stat-green">
+              <span>Activos:</span>
+              <strong>{{ filteredRestaurantsStats.active }}</strong>
+            </div>
+            <div class="crud-stat-pill stat-blue">
+              <span>Perfil completo:</span>
+              <strong>{{ filteredRestaurantsStats.complete }}</strong>
+            </div>
+            <div class="crud-stat-pill stat-amber">
+              <span>Por completar:</span>
+              <strong>{{ filteredRestaurantsStats.incomplete }}</strong>
+            </div>
           </div>
 
-          <div class="crud-filters-right">
-            <select v-model="restaurantFilters.status" @change="fetchRestaurants">
-              <option value="all">Estado: Todos</option>
-              <option value="active">Solo Activos</option>
-              <option value="inactive">Solo Inactivos</option>
-            </select>
-
-            <select v-model="restaurantFilters.profile" @change="fetchRestaurants">
-              <option value="all">Perfil: Todos</option>
-              <option value="complete">✓ Perfil Completo</option>
-              <option value="incomplete">⚠️ Falta Foto / Ubicación / Desc</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Grid de Tarjetas de Restaurantes -->
-        <div v-if="restaurantsLoading" class="empty-chart">Cargando directorio de restaurantes...</div>
-
-        <div v-else-if="restaurants.length" class="restaurants-grid">
-          <article
-            v-for="rest in restaurants"
-            :key="rest.id"
-            :class="['rest-card', { 'rest-inactive': !rest.is_active }]"
-          >
-            <!-- Portada / Foto del Restaurante -->
-            <div class="rest-card-media">
-              <img
-                v-if="rest.photo_url"
-                :src="rest.photo_url"
-                :alt="rest.name"
-                class="rest-cover-img"
+          <div class="crud-search-controls">
+            <div class="search-box">
+              <span class="search-icon">🔍</span>
+              <input
+                v-model="restaurantFilters.search"
+                type="text"
+                placeholder="Buscar local o código (ej. 609)..."
+                @input="fetchRestaurants"
               />
-              <div v-else class="rest-cover-placeholder" @click="openEditModal(rest)">
-                <div class="placeholder-circle">{{ rest.name.charAt(0).toUpperCase() }}</div>
-                <span class="add-photo-hint">📷 Clic para añadir foto</span>
-              </div>
-
-              <span class="rest-code-badge">#{{ rest.code }}</span>
-
-              <button
-                type="button"
-                :class="['status-pill-toggle', rest.is_active ? 'active' : 'inactive']"
-                :title="rest.is_active ? 'Clic para desactivar' : 'Clic para activar'"
-                @click="toggleRestaurantStatus(rest)"
-              >
-                {{ rest.is_active ? '● Activo' : '○ Inactivo' }}
-              </button>
             </div>
 
-            <!-- Cuerpo de la tarjeta -->
-            <div class="rest-card-body">
-              <h3 class="rest-title">{{ rest.name }}</h3>
+            <select v-model="restaurantFilters.status" aria-label="Filtrar por estado" @change="fetchRestaurants">
+              <option value="all">Estado: Todos</option>
+              <option value="active">Activos</option>
+              <option value="inactive">Inactivos</option>
+            </select>
 
-              <p v-if="rest.description" class="rest-desc">
-                {{ rest.description }}
-              </p>
-              <p v-else class="rest-desc-empty">
-                Sin descripción asignada. Edita este restaurante para añadir horarios, giro o notas.
-              </p>
+            <select v-model="restaurantFilters.profile" aria-label="Filtrar por perfil" @change="fetchRestaurants">
+              <option value="all">Perfil: Todos</option>
+              <option value="complete">✓ Completo</option>
+              <option value="incomplete">⚠️ Incompleto</option>
+            </select>
+          </div>
+        </div>
+
+        <div v-if="restaurantsLoading" class="empty-chart">Cargando directorio de restaurantes...</div>
+
+        <!-- Grid Paginado 3x2 en Monitor (y Lista fluida en Móvil) -->
+        <div v-else-if="restaurants.length" class="crud-monitor-body">
+          <div class="restaurants-grid">
+            <article
+              v-for="rest in paginatedRestaurants"
+              :key="rest.id"
+              :class="['rest-card', { 'rest-inactive': !rest.is_active }]"
+            >
+              <div class="rest-card-top">
+                <!-- Miniatura / Foto -->
+                <div class="rest-avatar-box" @click="openEditModal(rest)">
+                  <img
+                    v-if="rest.photo_url"
+                    :src="rest.photo_url"
+                    :alt="rest.name"
+                    class="rest-thumb-img"
+                  />
+                  <div v-else class="rest-thumb-placeholder">
+                    <span>{{ rest.name.charAt(0).toUpperCase() }}</span>
+                    <small>📷 Foto</small>
+                  </div>
+                </div>
+
+                <!-- Datos principales -->
+                <div class="rest-head-info">
+                  <div class="rest-badges-line">
+                    <span class="rest-code-badge">#{{ rest.code }}</span>
+                    <button
+                      type="button"
+                      :class="['status-pill-toggle', rest.is_active ? 'active' : 'inactive']"
+                      @click="toggleRestaurantStatus(rest)"
+                    >
+                      {{ rest.is_active ? '● Activo' : '○ Inactivo' }}
+                    </button>
+                  </div>
+                  <h3 class="rest-title" :title="rest.name">{{ rest.name }}</h3>
+                  <p v-if="rest.description" class="rest-desc">{{ rest.description }}</p>
+                  <p v-else class="rest-desc-empty">
+                    Sin descripción. Clic en editar para agregar giro, horario o referencias.
+                  </p>
+                </div>
+              </div>
 
               <!-- Checklist de campos del Admin -->
               <div class="profile-badges-row">
@@ -1191,52 +1318,61 @@ onMounted(async () => {
                   rel="noopener noreferrer"
                   class="field-chip chip-ok chip-link"
                 >
-                  📍 Ver ubicación en Mapa ↗
+                  📍 Mapa URL ↗
                 </a>
                 <span v-else class="field-chip chip-missing">
-                  ○ Sin ubicación URL
+                  ○ Sin mapa URL
                 </span>
                 <span :class="['field-chip', rest.description ? 'chip-ok' : 'chip-missing']">
-                  {{ rest.description ? '✓ Descripción' : '○ Sin descripción' }}
+                  {{ rest.description ? '✓ Descripción' : '○ Sin desc.' }}
                 </span>
               </div>
 
-              <!-- Métricas del restaurante -->
-              <div class="rest-metrics-strip">
-                <div>
-                  <small>Pedidos</small>
-                  <strong>{{ rest.orders_count }}</strong>
+              <!-- Footer de tarjeta con métricas y acciones -->
+              <div class="rest-card-footer">
+                <div class="rest-mini-metrics">
+                  <span>📦 <strong>{{ rest.orders_count }}</strong> ped.</span>
+                  <span>🛵 <strong>{{ formatCurrency(rest.total_delivery_fees) }}</strong></span>
                 </div>
-                <div>
-                  <small>Tarifas generadas</small>
-                  <strong>{{ formatCurrency(rest.total_delivery_fees) }}</strong>
-                </div>
-                <div>
-                  <small>Solicitudes</small>
-                  <strong>{{ rest.rider_requests_count }}</strong>
+                <div class="rest-card-actions">
+                  <button type="button" class="btn-edit-rest" @click="openEditModal(rest)">
+                    ✏️ Editar
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-delete-rest"
+                    title="Eliminar restaurante"
+                    @click="confirmDeleteRestaurant(rest)"
+                  >
+                    🗑️
+                  </button>
                 </div>
               </div>
+            </article>
+          </div>
 
-              <!-- Botones del CRUD -->
-              <div class="rest-card-actions">
-                <button
-                  type="button"
-                  class="btn-edit-rest"
-                  @click="openEditModal(rest)"
-                >
-                  ✏️ Editar Foto, Ubicación y Datos
-                </button>
-                <button
-                  type="button"
-                  class="btn-delete-rest"
-                  title="Eliminar restaurante"
-                  @click="confirmDeleteRestaurant(rest)"
-                >
-                  🗑️
-                </button>
-              </div>
-            </div>
-          </article>
+          <!-- Barra de paginación inferior para no usar scrollbar en monitor -->
+          <div v-if="totalRestaurantsPages > 1" class="crud-pagination-bar">
+            <button
+              type="button"
+              class="page-btn"
+              :disabled="restaurantsPage <= 1"
+              @click="restaurantsPage--"
+            >
+              ◀ Anterior
+            </button>
+            <span class="page-indicator">
+              Mostrando página {{ restaurantsPage }} de {{ totalRestaurantsPages }} ({{ restaurants.length }} restaurantes)
+            </span>
+            <button
+              type="button"
+              class="page-btn"
+              :disabled="restaurantsPage >= totalRestaurantsPages"
+              @click="restaurantsPage++"
+            >
+              Siguiente ▶
+            </button>
+          </div>
         </div>
 
         <div v-else class="empty-chart">
@@ -1244,6 +1380,40 @@ onMounted(async () => {
         </div>
       </section>
     </main>
+
+    <!-- ===================================================== -->
+    <!-- BARRA DE NAVEGACIÓN INFERIOR FIJA EN DISPOSITIVOS MÓVILES -->
+    <!-- ===================================================== -->
+    <nav class="mobile-bottom-nav">
+      <button
+        type="button"
+        :class="['mob-nav-btn', { active: activeSection === 'resumen' && summaryTab === 'charts' }]"
+        @click="switchToSection('resumen', 'charts')"
+      >
+        <span class="mob-nav-icon">📊</span>
+        <span>Resumen</span>
+      </button>
+      <button
+        type="button"
+        :class="['mob-nav-btn', { active: activeSection === 'resumen' && summaryTab === 'orders' }]"
+        @click="switchToSection('resumen', 'orders')"
+      >
+        <span class="mob-nav-icon">🧾</span>
+        <span>Pedidos</span>
+      </button>
+      <button
+        type="button"
+        :class="['mob-nav-btn', { active: activeSection === 'restaurantes' }]"
+        @click="switchToSection('restaurantes')"
+      >
+        <span class="mob-nav-icon">🏪</span>
+        <span>Locales ({{ summaryData.kpis.total_restaurants }})</span>
+      </button>
+      <button type="button" class="mob-nav-btn" @click="openCreateModal">
+        <span class="mob-nav-icon">➕</span>
+        <span>Nuevo</span>
+      </button>
+    </nav>
 
     <!-- ===================================================== -->
     <!-- MODAL PARA CREAR / EDITAR RESTAURANTE (ADMIN CRUD)    -->
@@ -1263,7 +1433,6 @@ onMounted(async () => {
         </header>
 
         <form class="modal-body" @submit.prevent="saveRestaurant">
-          <!-- Nombre -->
           <div class="form-field">
             <label>🏪 Nombre del restaurante *</label>
             <input
@@ -1276,10 +1445,9 @@ onMounted(async () => {
             />
           </div>
 
-          <!-- Foto del Restaurante (Subir archivo o URL) -->
           <div class="form-field">
             <div class="field-label-row">
-              <label>📷 Fotografía / Logo del Restaurante (Opcional)</label>
+              <label>📷 Fotografía / Logo (Opcional)</label>
               <div class="mini-tabs">
                 <button
                   type="button"
@@ -1316,7 +1484,6 @@ onMounted(async () => {
               />
             </div>
 
-            <!-- Vista previa de la foto -->
             <div v-if="restaurantForm.photo_url" class="photo-preview-box">
               <img :src="restaurantForm.photo_url" alt="Vista previa" />
               <button type="button" class="btn-remove-photo" @click="clearPhoto">
@@ -1325,7 +1492,6 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- Ubicación con URL -->
           <div class="form-field">
             <label>📍 Ubicación con URL (Google Maps / Waze)</label>
             <div class="input-with-action">
@@ -1347,18 +1513,16 @@ onMounted(async () => {
             <small>Pega el enlace de Google Maps para ubicar rápidamente el restaurante.</small>
           </div>
 
-          <!-- Descripción -->
           <div class="form-field">
             <label>📝 Descripción del restaurante</label>
             <textarea
               v-model="restaurantForm.description"
-              rows="3"
-              placeholder="Ej. Pizzería artesanal en Col. San Antonio. Horario de 1:00 PM a 10:30 PM. Entrada por el portón negro..."
+              rows="2"
+              placeholder="Ej. Pizzería artesanal en Col. San Antonio. Horario de 1:00 PM a 10:30 PM..."
               maxlength="2000"
             />
           </div>
 
-          <!-- Switch Estado Activo -->
           <label class="checkbox-row">
             <input v-model="restaurantForm.is_active" type="checkbox" />
             <span>El restaurante está <strong>Activo</strong> y autorizado para generar pedidos</span>
@@ -1388,7 +1552,7 @@ onMounted(async () => {
           <button type="button" class="modal-close" @click="deleteTarget = null">✕</button>
         </header>
         <div class="modal-body">
-          <p style="margin: 0 0 12px; color: #334155; line-height: 1.5;">
+          <p style="margin: 0 0 10px; color: #334155; line-height: 1.5;">
             ¿Estás seguro de que deseas eliminar a
             <strong>{{ deleteTarget.name }} (#{{ deleteTarget.code }})</strong>?
           </p>
@@ -1406,7 +1570,7 @@ onMounted(async () => {
             :disabled="deletingRestaurant"
             @click="executeDeleteRestaurant"
           >
-            {{ deletingRestaurant ? 'Eliminando...' : 'Sí, eliminar restaurante' }}
+            {{ deletingRestaurant ? 'Eliminando...' : 'Sí, eliminar' }}
           </button>
         </footer>
       </div>
@@ -1420,214 +1584,289 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+/* =========================================================
+   LAYOUT BASE PARA MONITOR DE ESCRITORIO (CERO SCROLLBARS)
+   ========================================================= */
 .admin-layout {
-  min-height: 100vh;
+  height: 100vh;
+  max-height: 100vh;
+  width: 100%;
+  max-width: 100vw;
+  overflow: hidden;
   display: grid;
-  grid-template-columns: 270px 1fr;
+  grid-template-columns: 215px minmax(0, 1fr);
   background: #f1f5f9;
   color: #0f172a;
+  box-sizing: border-box;
 }
 
-/* SIDEBAR */
+.mobile-admin-header,
+.mobile-bottom-nav,
+.mobile-orders-list {
+  display: none;
+}
+
+/* SIDEBAR COMPACTO */
 .admin-sidebar {
   background: #0f172a;
   color: #f8fafc;
-  padding: 24px 18px;
+  padding: 16px 14px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  position: sticky;
-  top: 0;
   height: 100vh;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .sidebar-brand {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding-bottom: 22px;
+  gap: 10px;
+  padding-bottom: 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .brand-logo {
-  width: 46px;
-  height: 46px;
-  border-radius: 12px;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
   background: linear-gradient(135deg, #d71920, #991b1b);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 900;
   color: #fff;
-  box-shadow: 0 4px 12px rgba(215, 25, 32, 0.4);
+  flex-shrink: 0;
 }
 
 .sidebar-brand h1 {
   margin: 0;
-  font-size: 1.2rem;
+  font-size: 1.05rem;
   font-weight: 800;
-  letter-spacing: 0.5px;
 }
 
 .admin-badge {
   display: inline-block;
-  margin-top: 3px;
-  font-size: 0.72rem;
+  margin-top: 2px;
+  font-size: 0.68rem;
   background: rgba(215, 25, 32, 0.25);
   color: #fca5a5;
-  padding: 2px 8px;
+  padding: 2px 7px;
   border-radius: 99px;
   font-weight: 700;
 }
 
 .sidebar-nav {
-  margin-top: 24px;
+  margin-top: 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  flex: 1;
+  gap: 6px;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
-  padding: 13px 14px;
-  border-radius: 12px;
-  border: 1px solid transparent;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: none;
   background: transparent;
   color: #cbd5e1;
   text-align: left;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.18s ease;
 }
 
 .nav-item:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.07);
   color: #fff;
 }
 
 .nav-item.active {
   background: linear-gradient(135deg, #d71920, #b9151b);
   color: #fff;
-  box-shadow: 0 6px 16px rgba(215, 25, 32, 0.32);
+  box-shadow: 0 4px 12px rgba(215, 25, 32, 0.3);
 }
 
 .nav-icon {
-  font-size: 1.35rem;
+  font-size: 1.15rem;
 }
 
 .nav-text {
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-width: 0;
 }
 
 .nav-text strong {
-  font-size: 0.95rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .nav-text small {
-  font-size: 0.75rem;
+  font-size: 0.68rem;
   opacity: 0.8;
 }
 
 .nav-counter {
-  background: rgba(0, 0, 0, 0.25);
-  padding: 3px 8px;
+  background: rgba(0, 0, 0, 0.28);
+  padding: 2px 7px;
   border-radius: 99px;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 700;
 }
 
 .sidebar-footer {
-  padding-top: 16px;
+  padding-top: 12px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-sidebar-new {
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.06);
+  color: #f8fafc;
+  font-weight: 700;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.btn-sidebar-new:hover {
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .btn-logout {
   width: 100%;
-  padding: 11px 14px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.05);
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(239, 68, 68, 0.1);
   color: #fda4af;
   font-weight: 600;
+  font-size: 0.8rem;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  transition: background 0.2s;
+  gap: 6px;
 }
 
 .btn-logout:hover {
-  background: rgba(239, 68, 68, 0.2);
+  background: rgba(239, 68, 68, 0.22);
 }
 
-/* MAIN AREA */
+/* =========================================================
+   CONTENEDOR PRINCIPAL DEL MONITOR
+   ========================================================= */
 .admin-main {
-  padding: 28px 32px 48px;
-  max-width: 1600px;
+  height: 100vh;
+  max-height: 100vh;
   width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 16px;
+  gap: 8px;
   box-sizing: border-box;
 }
 
 .admin-topbar {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.topbar-title-group {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
   flex-wrap: wrap;
 }
 
 .admin-topbar h2 {
-  margin: 0 0 6px;
-  font-size: 1.65rem;
+  margin: 0;
+  font-size: 1.2rem;
   font-weight: 800;
   color: #0f172a;
 }
 
-.topbar-sub {
-  margin: 0;
+.topbar-subtitle-inline {
   color: #64748b;
-  font-size: 0.92rem;
+  font-size: 0.78rem;
 }
 
 .topbar-actions {
   display: flex;
-  gap: 10px;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.view-mode-pills {
+  display: flex;
+  background: #e2e8f0;
+  padding: 3px;
+  border-radius: 9px;
+  gap: 3px;
+}
+
+.mode-pill {
+  border: none;
+  background: transparent;
+  padding: 5px 11px;
+  border-radius: 7px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #475569;
+  cursor: pointer;
+}
+
+.mode-pill.active {
+  background: #fff;
+  color: #d71920;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.btn-compact {
+  padding: 6px 12px !important;
+  font-size: 0.78rem !important;
+  border-radius: 8px !important;
 }
 
 .btn-primary {
   background: linear-gradient(135deg, #d71920, #b9151b);
   color: #fff;
   border: none;
-  padding: 10px 18px;
-  border-radius: 10px;
+  padding: 9px 14px;
+  border-radius: 9px;
   font-weight: 700;
-  font-size: 0.9rem;
+  font-size: 0.84rem;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(215, 25, 32, 0.25);
-}
-
-.btn-primary:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 .btn-secondary {
   background: #fff;
   color: #334155;
   border: 1px solid #cbd5e1;
-  padding: 10px 16px;
-  border-radius: 10px;
+  padding: 9px 14px;
+  border-radius: 9px;
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: 0.84rem;
   cursor: pointer;
 }
 
@@ -1635,53 +1874,62 @@ onMounted(async () => {
   background: #dc2626;
   color: #fff;
   border: none;
-  padding: 10px 16px;
-  border-radius: 10px;
+  padding: 9px 14px;
+  border-radius: 9px;
   font-weight: 700;
   cursor: pointer;
 }
 
-/* FILTERS CARD */
-.filters-card {
-  background: #fff;
-  border-radius: 16px;
-  padding: 18px 22px;
-  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.05);
-  margin-bottom: 22px;
+/* =========================================================
+   SECCIÓN DEL MONITOR (FLEXIBLE Y SIN DESBORDAMIENTO)
+   ========================================================= */
+.monitor-section {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 8px;
+  overflow: hidden;
 }
 
-.period-pills {
+/* BARRA DE FILTROS EN UNA SOLA LÍNEA */
+.filters-strip {
+  background: #fff;
+  border-radius: 11px;
+  padding: 7px 12px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
   flex-wrap: wrap;
 }
 
-.filter-label {
-  font-weight: 700;
-  font-size: 0.88rem;
-  color: #475569;
-}
-
-.pills-row {
+.pills-scroll-row {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.filter-tag {
+  font-weight: 700;
+  font-size: 0.76rem;
+  color: #475569;
+  margin-right: 2px;
 }
 
 .pill-btn {
-  padding: 7px 14px;
+  padding: 4px 10px;
   border-radius: 99px;
   border: 1px solid #e2e8f0;
   background: #f8fafc;
   color: #475569;
   font-weight: 600;
-  font-size: 0.84rem;
+  font-size: 0.75rem;
   cursor: pointer;
-  transition: all 0.15s;
+  white-space: nowrap;
 }
 
 .pill-btn.active {
@@ -1690,71 +1938,57 @@ onMounted(async () => {
   border-color: #d71920;
 }
 
-.custom-dates-row {
+.custom-dates-inline {
   display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding-top: 8px;
-  border-top: 1px dashed #e2e8f0;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
 }
 
-.filter-input-box {
+.custom-dates-inline input {
+  padding: 4px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 0.75rem;
+}
+
+.filters-selects-inline {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.filter-input-box input {
-  padding: 7px 12px;
-  border: 1px solid #cbd5e1;
+.filters-selects-inline select {
+  padding: 5px 10px;
   border-radius: 8px;
-}
-
-.filters-selects-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 14px;
-}
-
-.filter-select-item {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.filter-select-item label {
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: #475569;
-}
-
-.filter-select-item select {
-  padding: 9px 12px;
-  border-radius: 10px;
   border: 1px solid #cbd5e1;
   background: #f8fafc;
-  font-size: 0.9rem;
+  font-size: 0.76rem;
   font-weight: 600;
   color: #1e293b;
+  max-width: 220px;
 }
 
-/* KPIS GRID */
-.kpis-grid {
+/* =========================================================
+   FILA DE 6 KPIS COMPACTOS
+   ========================================================= */
+.kpis-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .kpi-card {
   background: #fff;
-  border-radius: 16px;
-  padding: 20px;
-  box-shadow: 0 4px 18px rgba(15, 23, 42, 0.05);
-  border-top: 4px solid #cbd5e1;
+  border-radius: 11px;
+  padding: 9px 11px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+  border-top: 3px solid #cbd5e1;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
+  min-width: 0;
 }
 
 .kpi-red { border-top-color: #d71920; }
@@ -1768,16 +2002,17 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 4px;
 }
 
 .kpi-icon {
-  font-size: 1.5rem;
+  font-size: 1.05rem;
 }
 
 .kpi-trend {
-  font-size: 0.78rem;
+  font-size: 0.66rem;
   font-weight: 800;
-  padding: 3px 8px;
+  padding: 1px 6px;
   border-radius: 99px;
 }
 
@@ -1792,90 +2027,120 @@ onMounted(async () => {
 }
 
 .kpi-badge-neutral {
-  font-size: 0.75rem;
+  font-size: 0.64rem;
   font-weight: 700;
   background: #f1f5f9;
   color: #475569;
-  padding: 3px 8px;
+  padding: 1px 6px;
   border-radius: 99px;
+  white-space: nowrap;
 }
 
 .kpi-value {
-  font-size: 1.85rem;
+  font-size: clamp(1rem, 1.25vw, 1.35rem);
   font-weight: 900;
   color: #0f172a;
-  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kpi-fraction {
+  font-size: 0.75rem;
+  color: #64748b;
+  font-weight: 600;
 }
 
 .kpi-title {
-  font-size: 0.9rem;
+  font-size: 0.74rem;
   font-weight: 700;
   color: #334155;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .kpi-sub {
-  font-size: 0.78rem;
+  font-size: 0.66rem;
   color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* CHARTS */
-.charts-grid-two {
+/* =========================================================
+   BENTO WORKSPACE DE GRÁFICAS (100% ALTURA DEL MONITOR)
+   ========================================================= */
+.bento-charts-workspace {
+  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: 1.65fr 1fr;
-  gap: 20px;
-  margin-bottom: 20px;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
 }
 
-.charts-grid-three {
+.bento-row-top {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
-  gap: 20px;
-  margin-bottom: 24px;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 8px;
+  min-height: 0;
+}
+
+.bento-row-bottom {
+  display: grid;
+  grid-template-columns: 1fr 1.15fr 1fr;
+  gap: 8px;
+  min-height: 0;
 }
 
 .chart-card {
   background: #fff;
-  border-radius: 16px;
-  padding: 22px;
-  box-shadow: 0 4px 18px rgba(15, 23, 42, 0.05);
+  border-radius: 12px;
+  padding: 10px 14px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .chart-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 18px;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-shrink: 0;
 }
 
 .chart-header h3 {
-  margin: 0 0 4px;
-  font-size: 1.05rem;
+  margin: 0;
+  font-size: 0.86rem;
   font-weight: 800;
+  color: #0f172a;
 }
 
 .chart-header p {
-  margin: 0;
-  font-size: 0.8rem;
+  margin: 1px 0 0;
+  font-size: 0.68rem;
   color: #64748b;
 }
 
 .chart-toggle {
   display: flex;
   background: #f1f5f9;
-  padding: 3px;
-  border-radius: 8px;
-  gap: 4px;
+  padding: 2px;
+  border-radius: 6px;
+  gap: 2px;
 }
 
 .toggle-btn {
   border: none;
   background: transparent;
-  padding: 5px 10px;
-  border-radius: 6px;
-  font-size: 0.78rem;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 0.7rem;
   font-weight: 700;
   color: #64748b;
   cursor: pointer;
@@ -1884,48 +2149,52 @@ onMounted(async () => {
 .toggle-btn.active {
   background: #fff;
   color: #0f172a;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
-/* BAR CHART */
+/* GRÁFICA DE BARRAS DIARIAS ADAPTABLE */
 .bar-chart-wrapper {
   flex: 1;
+  min-height: 0;
   display: flex;
   align-items: flex-end;
-  min-height: 220px;
-  padding-top: 12px;
+  padding-top: 4px;
+  padding-bottom: 10px;
 }
 
 .bar-chart-columns {
   display: flex;
   align-items: flex-end;
-  gap: 6px;
+  gap: 3px;
   width: 100%;
-  height: 200px;
+  height: 100%;
+  min-width: 0;
 }
 
 .bar-col-item {
-  flex: 1;
+  flex: 1 1 0%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   height: 100%;
-  min-width: 18px;
 }
 
 .bar-top-val {
-  font-size: 0.68rem;
+  font-size: 0.58rem;
   font-weight: 700;
   color: #475569;
-  min-height: 16px;
+  min-height: 12px;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .bar-track {
   flex: 1;
   width: 100%;
-  max-width: 28px;
+  max-width: 22px;
   background: #f1f5f9;
-  border-radius: 6px 6px 0 0;
+  border-radius: 4px 4px 0 0;
   display: flex;
   align-items: flex-end;
   overflow: hidden;
@@ -1933,8 +2202,8 @@ onMounted(async () => {
 
 .bar-fill {
   width: 100%;
-  border-radius: 6px 6px 0 0;
-  transition: height 0.35s ease;
+  border-radius: 4px 4px 0 0;
+  transition: height 0.3s ease;
 }
 
 .fill-red {
@@ -1946,25 +2215,27 @@ onMounted(async () => {
 }
 
 .bar-label {
-  font-size: 0.68rem;
+  font-size: 0.56rem;
   color: #64748b;
-  margin-top: 6px;
+  margin-top: 4px;
   transform: rotate(-25deg);
   white-space: nowrap;
 }
 
-/* DONUT */
-.donut-layout {
+/* DONA HORIZONTAL COMPACTA */
+.donut-horizontal-layout {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 18px;
+  gap: 14px;
 }
 
 .donut-svg-box {
   position: relative;
-  width: 165px;
-  height: 165px;
+  width: 115px;
+  height: 115px;
+  flex-shrink: 0;
 }
 
 .donut-svg {
@@ -1983,134 +2254,151 @@ onMounted(async () => {
 }
 
 .donut-center strong {
-  font-size: 1.5rem;
+  font-size: 1.15rem;
   font-weight: 900;
 }
 
 .donut-center span {
-  font-size: 0.75rem;
+  font-size: 0.65rem;
   color: #64748b;
 }
 
 .donut-legend {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
 }
 
 .legend-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 10px;
+  padding: 4px 8px;
   background: #f8fafc;
-  border-radius: 8px;
-  font-size: 0.84rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
 }
 
 .legend-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
 }
 
 .legend-dot {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .legend-right {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  font-size: 0.68rem;
 }
 
 .legend-right small {
   color: #64748b;
-  font-size: 0.74rem;
+  font-size: 0.62rem;
 }
 
-/* RANKING TOP RESTAURANTS */
+/* RANKING TOP RESTAURANTES */
 .ranking-list {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  justify-content: space-around;
+  gap: 4px;
 }
 
 .ranking-item {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 3px;
 }
 
 .ranking-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
 }
 
 .ranking-identity {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
+  min-width: 0;
 }
 
 .rank-num {
   font-weight: 800;
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   color: #d71920;
-  width: 22px;
+  width: 18px;
 }
 
-.rank-avatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
+.rank-avatar,
+.rank-avatar-placeholder {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
   object-fit: cover;
+  flex-shrink: 0;
 }
 
 .rank-avatar-placeholder {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
   background: #fee2e2;
   color: #d71920;
   font-weight: 800;
+  font-size: 0.75rem;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
+.rank-text-box {
+  min-width: 0;
+}
+
 .rank-name {
   display: block;
-  font-size: 0.88rem;
+  font-size: 0.76rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .rank-code {
-  font-size: 0.74rem;
+  display: block;
+  font-size: 0.64rem;
   color: #64748b;
 }
 
 .ranking-metrics {
   text-align: right;
+  flex-shrink: 0;
 }
 
 .rank-orders {
   display: block;
-  font-size: 0.78rem;
+  font-size: 0.66rem;
   color: #475569;
 }
 
 .rank-fees {
-  font-size: 0.86rem;
+  font-size: 0.74rem;
   color: #059669;
 }
 
 .ranking-bar-bg {
-  height: 6px;
+  height: 4px;
   background: #f1f5f9;
   border-radius: 99px;
   overflow: hidden;
@@ -2119,21 +2407,22 @@ onMounted(async () => {
 .ranking-bar-fill {
   height: 100%;
   background: linear-gradient(90deg, #d71920, #f97316);
-  border-radius: 99px;
 }
 
-/* HOURLY CHART */
+/* HORAS PICO + PILLS DE DISTANCIA */
 .hourly-chart {
+  flex: 1;
+  min-height: 0;
   display: flex;
   align-items: flex-end;
-  gap: 4px;
-  height: 140px;
-  padding-top: 10px;
-  margin-bottom: 18px;
+  gap: 2px;
+  padding-top: 4px;
+  margin-bottom: 6px;
 }
 
 .hour-col {
-  flex: 1;
+  flex: 1 1 0%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2141,17 +2430,17 @@ onMounted(async () => {
 }
 
 .hour-val {
-  font-size: 0.65rem;
+  font-size: 0.56rem;
   font-weight: 700;
   color: #475569;
-  min-height: 14px;
+  min-height: 10px;
 }
 
 .hour-track {
   flex: 1;
   width: 100%;
   background: #f1f5f9;
-  border-radius: 4px 4px 0 0;
+  border-radius: 3px 3px 0 0;
   display: flex;
   align-items: flex-end;
 }
@@ -2159,7 +2448,7 @@ onMounted(async () => {
 .hour-fill {
   width: 100%;
   background: #3b82f6;
-  border-radius: 4px 4px 0 0;
+  border-radius: 3px 3px 0 0;
 }
 
 .hour-fill.hour-peak {
@@ -2167,93 +2456,100 @@ onMounted(async () => {
 }
 
 .hour-label {
-  font-size: 0.65rem;
+  font-size: 0.54rem;
   color: #64748b;
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
-.distance-ranges-box {
+.distance-pills-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  padding-top: 6px;
   border-top: 1px solid #f1f5f9;
-  padding-top: 14px;
+  flex-shrink: 0;
 }
 
-.distance-ranges-box h4 {
-  margin: 0 0 10px;
-  font-size: 0.85rem;
-  color: #334155;
-}
-
-.distance-bars {
+.dist-mini-pill {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 3px 6px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  align-items: center;
+  font-size: 0.64rem;
 }
 
-.dist-info {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.78rem;
-  margin-bottom: 3px;
+.dist-range-lbl {
+  color: #64748b;
 }
 
-.dist-progress-bg {
-  height: 6px;
-  background: #f1f5f9;
-  border-radius: 99px;
-  overflow: hidden;
-}
-
-.dist-progress-fill {
-  height: 100%;
-  background: #f59e0b;
-}
-
-/* ZONES */
+/* TOP COLONIAS */
 .zones-list {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  justify-content: space-around;
+  gap: 4px;
 }
 
 .zone-item {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .zone-header {
   display: flex;
   justify-content: space-between;
-  font-size: 0.88rem;
+  align-items: center;
+  font-size: 0.75rem;
+}
+
+.zone-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.zone-title-wrap strong {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .zone-badge {
-  display: inline-block;
-  width: 20px;
-  height: 20px;
+  width: 17px;
+  height: 17px;
   border-radius: 50%;
   background: #f1f5f9;
-  text-align: center;
-  font-size: 0.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
   font-weight: 700;
-  margin-right: 6px;
+  flex-shrink: 0;
 }
 
 .zone-stats {
   font-weight: 700;
   color: #2563eb;
-  font-size: 0.8rem;
+  font-size: 0.7rem;
+  flex-shrink: 0;
 }
 
 .zone-sub {
   display: flex;
   justify-content: space-between;
-  font-size: 0.74rem;
+  font-size: 0.64rem;
   color: #64748b;
 }
 
 .zone-bar-bg {
-  height: 5px;
+  height: 4px;
   background: #f1f5f9;
   border-radius: 99px;
   overflow: hidden;
@@ -2264,38 +2560,84 @@ onMounted(async () => {
   background: #2563eb;
 }
 
-/* TABLE */
-.table-card {
+/* =========================================================
+   VISTA TABLA DE PEDIDOS PAGINADA (SIN SCROLL EN MONITOR)
+   ========================================================= */
+.orders-workspace-card {
+  flex: 1;
+  min-height: 0;
   background: #fff;
-  border-radius: 16px;
-  padding: 22px;
-  box-shadow: 0 4px 18px rgba(15, 23, 42, 0.05);
+  border-radius: 12px;
+  padding: 12px 16px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.table-header h3 {
-  margin: 0 0 4px;
-  font-size: 1.05rem;
+.table-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
 }
 
-.table-header p {
-  margin: 0 0 16px;
-  font-size: 0.8rem;
+.table-header-row h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.table-header-row p {
+  margin: 2px 0 0;
+  font-size: 0.74rem;
   color: #64748b;
 }
 
-.table-responsive {
-  overflow-x: auto;
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-btn {
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #334155;
+  cursor: pointer;
+}
+
+.page-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.page-indicator {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #475569;
+}
+
+.table-desktop-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .admin-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.86rem;
+  font-size: 0.78rem;
 }
 
 .admin-table th {
   text-align: left;
-  padding: 12px;
+  padding: 8px 10px;
   background: #f8fafc;
   color: #475569;
   font-weight: 700;
@@ -2303,15 +2645,16 @@ onMounted(async () => {
 }
 
 .admin-table td {
-  padding: 12px;
+  padding: 7px 10px;
   border-bottom: 1px solid #f1f5f9;
 }
 
 .folio-pill {
   font-family: monospace;
   font-weight: 700;
+  font-size: 0.74rem;
   background: #f1f5f9;
-  padding: 4px 8px;
+  padding: 3px 7px;
   border-radius: 6px;
 }
 
@@ -2322,49 +2665,66 @@ onMounted(async () => {
 
 .table-rest-cell small {
   color: #64748b;
-  font-size: 0.75rem;
+  font-size: 0.68rem;
 }
 
 .btn-table-link {
   display: inline-block;
-  padding: 6px 10px;
+  padding: 4px 9px;
   background: #eff6ff;
   color: #1d4ed8;
-  border-radius: 8px;
+  border-radius: 6px;
   text-decoration: none;
   font-weight: 700;
-  font-size: 0.78rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
 }
 
-/* CRUD RESTAURANTES */
-.crud-stats-bar {
+/* =========================================================
+   CRUD DE RESTAURANTES (GRID 3x2 EN MONITOR SIN SCROLL)
+   ========================================================= */
+.crud-header-bar {
+  background: #fff;
+  border-radius: 11px;
+  padding: 8px 12px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
   display: flex;
-  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
   flex-wrap: wrap;
-  margin-bottom: 16px;
+}
+
+.crud-stats-pills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .crud-stat-pill {
-  background: #fff;
-  padding: 10px 16px;
-  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  padding: 4px 10px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+}
+
+.crud-search-controls {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 0.86rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-}
-
-.crud-toolbar {
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
+  flex: 1;
+  justify-content: flex-end;
+  min-width: 260px;
 }
 
 .search-box {
   flex: 1;
-  min-width: 260px;
+  max-width: 300px;
   position: relative;
   display: flex;
   align-items: center;
@@ -2372,119 +2732,134 @@ onMounted(async () => {
 
 .search-icon {
   position: absolute;
-  left: 12px;
+  left: 10px;
+  font-size: 0.8rem;
 }
 
 .search-box input {
   width: 100%;
-  padding: 10px 14px 10px 36px;
-  border-radius: 10px;
+  padding: 6px 10px 6px 30px;
+  border-radius: 8px;
   border: 1px solid #cbd5e1;
-  font-size: 0.92rem;
+  font-size: 0.78rem;
 }
 
-.crud-filters-right {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.crud-filters-right select {
-  padding: 10px 12px;
-  border-radius: 10px;
+.crud-search-controls select {
+  padding: 6px 10px;
+  border-radius: 8px;
   border: 1px solid #cbd5e1;
   background: #f8fafc;
+  font-size: 0.76rem;
   font-weight: 600;
 }
 
+.crud-monitor-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .restaurants-grid {
+  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .rest-card {
   background: #fff;
-  border-radius: 16px;
-  overflow: hidden;
-  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.06);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
   display: flex;
   flex-direction: column;
-  transition: transform 0.2s;
-}
-
-.rest-card:hover {
-  transform: translateY(-2px);
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
 }
 
 .rest-inactive {
   opacity: 0.72;
 }
 
-.rest-card-media {
-  position: relative;
-  height: 165px;
-  background: linear-gradient(135deg, #1e293b, #334155);
+.rest-card-top {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
 }
 
-.rest-cover-img {
+.rest-avatar-box {
+  width: 64px;
+  height: 64px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #1e293b, #334155);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.rest-thumb-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.rest-cover-placeholder {
+.rest-thumb-placeholder {
   width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  cursor: pointer;
-  color: #cbd5e1;
+  color: #fff;
 }
 
-.placeholder-circle {
-  width: 54px;
-  height: 54px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  font-size: 1.5rem;
+.rest-thumb-placeholder span {
+  font-size: 1.15rem;
   font-weight: 800;
+}
+
+.rest-thumb-placeholder small {
+  font-size: 0.58rem;
+  opacity: 0.85;
+}
+
+.rest-head-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.rest-badges-line {
   display: flex;
   align-items: center;
-  justify-content: center;
-}
-
-.add-photo-hint {
-  font-size: 0.78rem;
-  background: rgba(0, 0, 0, 0.35);
-  padding: 4px 10px;
-  border-radius: 99px;
+  justify-content: space-between;
+  gap: 6px;
 }
 
 .rest-code-badge {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  background: rgba(15, 23, 42, 0.85);
+  background: #0f172a;
   color: #fff;
-  padding: 4px 10px;
-  border-radius: 8px;
+  padding: 2px 7px;
+  border-radius: 6px;
   font-weight: 800;
-  font-size: 0.82rem;
+  font-size: 0.7rem;
 }
 
 .status-pill-toggle {
-  position: absolute;
-  top: 12px;
-  right: 12px;
   border: none;
-  padding: 5px 11px;
+  padding: 2px 8px;
   border-radius: 99px;
-  font-size: 0.76rem;
+  font-size: 0.68rem;
   font-weight: 800;
   cursor: pointer;
 }
@@ -2499,30 +2874,31 @@ onMounted(async () => {
   color: #b91c1c;
 }
 
-.rest-card-body {
-  padding: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  flex: 1;
-}
-
 .rest-title {
   margin: 0;
-  font-size: 1.15rem;
+  font-size: 0.92rem;
   font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rest-desc,
+.rest-desc-empty {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .rest-desc {
-  margin: 0;
-  font-size: 0.85rem;
   color: #475569;
-  line-height: 1.45;
 }
 
 .rest-desc-empty {
-  margin: 0;
-  font-size: 0.82rem;
   color: #94a3b8;
   font-style: italic;
 }
@@ -2530,13 +2906,13 @@ onMounted(async () => {
 .profile-badges-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
 }
 
 .field-chip {
-  font-size: 0.74rem;
+  font-size: 0.66rem;
   font-weight: 700;
-  padding: 4px 9px;
+  padding: 2px 7px;
   border-radius: 99px;
   text-decoration: none;
 }
@@ -2546,52 +2922,41 @@ onMounted(async () => {
   color: #047857;
 }
 
-.chip-link:hover {
-  background: #d1fae5;
-}
-
 .chip-missing {
   background: #f1f5f9;
   color: #64748b;
 }
 
-.rest-metrics-strip {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  background: #f8fafc;
-  padding: 10px;
-  border-radius: 10px;
-  text-align: center;
+.rest-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid #f1f5f9;
 }
 
-.rest-metrics-strip small {
-  display: block;
-  font-size: 0.7rem;
-  color: #64748b;
-}
-
-.rest-metrics-strip strong {
-  font-size: 0.9rem;
-  color: #0f172a;
+.rest-mini-metrics {
+  display: flex;
+  gap: 8px;
+  font-size: 0.72rem;
+  color: #475569;
 }
 
 .rest-card-actions {
   display: flex;
-  gap: 8px;
-  margin-top: auto;
+  gap: 5px;
 }
 
 .btn-edit-rest {
-  flex: 1;
-  padding: 10px 12px;
-  border-radius: 10px;
+  padding: 5px 10px;
+  border-radius: 7px;
   border: 1px solid #cbd5e1;
   background: #fff;
   color: #0f172a;
   font-weight: 700;
-  font-size: 0.84rem;
+  font-size: 0.74rem;
   cursor: pointer;
-  transition: all 0.15s;
 }
 
 .btn-edit-rest:hover {
@@ -2600,14 +2965,28 @@ onMounted(async () => {
 }
 
 .btn-delete-rest {
-  padding: 10px 12px;
-  border-radius: 10px;
+  padding: 5px 8px;
+  border-radius: 7px;
   border: 1px solid #fecdd3;
   background: #fff1f2;
   cursor: pointer;
+  font-size: 0.74rem;
 }
 
-/* MODAL */
+.crud-pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: #fff;
+  padding: 6px 12px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+/* =========================================================
+   MODALES Y TOAST
+   ========================================================= */
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -2615,26 +2994,26 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px;
+  padding: 14px;
   z-index: 1000;
 }
 
 .modal-card {
   background: #fff;
-  border-radius: 18px;
+  border-radius: 16px;
   width: 100%;
-  max-width: 560px;
+  max-width: 520px;
   max-height: 92vh;
   overflow-y: auto;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
 }
 
 .modal-small {
-  max-width: 420px;
+  max-width: 400px;
 }
 
 .modal-header {
-  padding: 20px 24px;
+  padding: 16px 20px;
   border-bottom: 1px solid #f1f5f9;
   display: flex;
   align-items: flex-start;
@@ -2643,41 +3022,41 @@ onMounted(async () => {
 }
 
 .modal-header h3 {
-  margin: 0 0 4px;
-  font-size: 1.15rem;
+  margin: 0 0 3px;
+  font-size: 1.05rem;
 }
 
 .modal-header p {
   margin: 0;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   color: #64748b;
 }
 
 .modal-close {
   border: none;
   background: #f1f5f9;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border-radius: 8px;
   cursor: pointer;
   font-weight: 700;
 }
 
 .modal-body {
-  padding: 20px 24px;
+  padding: 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .form-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 
 .form-field label {
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   font-weight: 700;
   color: #334155;
 }
@@ -2685,15 +3064,15 @@ onMounted(async () => {
 .form-field input,
 .form-field textarea {
   width: 100%;
-  padding: 11px 13px;
+  padding: 10px 12px;
   border: 1px solid #cbd5e1;
-  border-radius: 10px;
-  font-size: 0.92rem;
+  border-radius: 9px;
+  font-size: 16px;
   box-sizing: border-box;
 }
 
 .form-field small {
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   color: #64748b;
 }
 
@@ -2701,6 +3080,8 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .mini-tabs {
@@ -2714,7 +3095,7 @@ onMounted(async () => {
   border: none;
   background: transparent;
   padding: 4px 8px;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-weight: 700;
   border-radius: 5px;
   cursor: pointer;
@@ -2727,16 +3108,16 @@ onMounted(async () => {
 
 .upload-zone {
   border: 1px dashed #cbd5e1;
-  padding: 12px;
-  border-radius: 10px;
+  padding: 10px;
+  border-radius: 9px;
   background: #f8fafc;
 }
 
 .photo-preview-box {
-  margin-top: 8px;
+  margin-top: 6px;
   position: relative;
-  height: 150px;
-  border-radius: 12px;
+  height: 130px;
+  border-radius: 10px;
   overflow: hidden;
   border: 1px solid #e2e8f0;
 }
@@ -2751,12 +3132,12 @@ onMounted(async () => {
   position: absolute;
   bottom: 8px;
   right: 8px;
-  background: rgba(15, 23, 42, 0.8);
+  background: rgba(15, 23, 42, 0.85);
   color: #fff;
   border: none;
-  padding: 5px 10px;
+  padding: 4px 9px;
   border-radius: 6px;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   cursor: pointer;
 }
 
@@ -2768,55 +3149,58 @@ onMounted(async () => {
 .btn-test-map {
   background: #eff6ff;
   color: #1d4ed8;
-  padding: 10px 12px;
-  border-radius: 10px;
+  padding: 9px 12px;
+  border-radius: 9px;
   text-decoration: none;
   font-weight: 700;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
 }
 
 .checkbox-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 0.88rem;
+  gap: 8px;
+  font-size: 0.84rem;
   cursor: pointer;
 }
 
 .modal-error {
   background: #fff1f2;
   color: #be123c;
-  padding: 10px 12px;
+  padding: 9px 12px;
   border-radius: 8px;
-  font-size: 0.84rem;
+  font-size: 0.8rem;
 }
 
 .modal-footer {
-  padding: 16px 24px;
+  padding: 12px 20px;
   border-top: 1px solid #f1f5f9;
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 8px;
 }
 
 .empty-chart {
-  padding: 36px 16px;
+  padding: 24px 12px;
   text-align: center;
   color: #94a3b8;
-  font-size: 0.9rem;
+  font-size: 0.84rem;
+  margin: auto;
 }
 
 .admin-toast {
   position: fixed;
-  bottom: 24px;
-  right: 24px;
-  padding: 14px 20px;
-  border-radius: 12px;
+  bottom: 20px;
+  right: 20px;
+  padding: 12px 18px;
+  border-radius: 10px;
   background: #0f172a;
   color: #fff;
   font-weight: 700;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
   z-index: 2000;
 }
@@ -2825,18 +3209,308 @@ onMounted(async () => {
   background: #dc2626;
 }
 
+/* =========================================================
+   ADAPTACIÓN 100% RESPONSIVA PARA MÓVILES Y TABLETS
+   ========================================================= */
 @media (max-width: 1024px) {
   .admin-layout {
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    max-height: none;
+    min-height: 100vh;
+    overflow: visible;
+    padding-bottom: 72px;
   }
 
   .admin-sidebar {
-    height: auto;
-    position: relative;
+    display: none;
   }
 
-  .charts-grid-two {
+  .mobile-admin-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #0f172a;
+    color: #fff;
+    padding: 12px 16px;
+    position: sticky;
+    top: 0;
+    z-index: 900;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  }
+
+  .mobile-brand-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .brand-logo-sm {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    background: #d71920;
+    color: #fff;
+    font-weight: 900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+  }
+
+  .mobile-code-pill {
+    margin-left: 6px;
+    font-size: 0.7rem;
+    background: rgba(215, 25, 32, 0.3);
+    color: #fca5a5;
+    padding: 2px 7px;
+    border-radius: 99px;
+    font-weight: 700;
+  }
+
+  .mobile-header-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .btn-mobile-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  .btn-mobile-exit {
+    background: rgba(239, 68, 68, 0.2);
+  }
+
+  .admin-main {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    padding: 14px 12px 24px;
+    gap: 12px;
+  }
+
+  .monitor-section {
+    overflow: visible;
+    gap: 12px;
+  }
+
+  .topbar-subtitle-inline {
+    display: none;
+  }
+
+  .filters-strip {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .pills-scroll-row {
+    overflow-x: auto;
+    padding-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .filters-selects-inline {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .filters-selects-inline select {
+    max-width: none;
+    width: 100%;
+    padding: 9px 10px;
+    font-size: 0.84rem;
+  }
+
+  .kpis-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .kpi-card {
+    padding: 12px;
+  }
+
+  .kpi-value {
+    font-size: clamp(1.15rem, 4.5vw, 1.4rem);
+  }
+
+  .bento-charts-workspace {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .bento-row-top,
+  .bento-row-bottom {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .bar-chart-wrapper {
+    min-height: 180px;
+  }
+
+  .bar-chart-columns {
+    height: 165px;
+  }
+
+  .hourly-chart {
+    min-height: 130px;
+    height: 130px;
+  }
+
+  .crud-header-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .crud-search-controls {
+    flex-direction: column;
+    align-items: stretch;
+    min-width: 0;
+  }
+
+  .search-box {
+    max-width: none;
+  }
+
+  .restaurants-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    grid-template-rows: none;
+    gap: 12px;
+  }
+
+  .mobile-bottom-nav {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #ffffff;
+    border-top: 1px solid #e2e8f0;
+    box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.08);
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+    z-index: 950;
+  }
+
+  .mob-nav-btn {
+    border: none;
+    background: transparent;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 6px 4px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #64748b;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  .mob-nav-btn.active {
+    color: #d71920;
+    background: #fff1f2;
+  }
+
+  .mob-nav-icon {
+    font-size: 1.15rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .filters-selects-inline {
     grid-template-columns: 1fr;
+  }
+
+  .donut-horizontal-layout {
+    flex-direction: column;
+  }
+
+  .table-desktop-wrap,
+  .pagination-controls {
+    display: none;
+  }
+
+  .mobile-orders-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .mobile-order-card {
+    border: 1px solid #e2e8f0;
+    background: #f8fafc;
+    border-radius: 10px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .mob-order-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .mob-order-date {
+    font-size: 0.72rem;
+    color: #64748b;
+  }
+
+  .mob-order-rest {
+    font-size: 0.85rem;
+  }
+
+  .mob-order-dest {
+    font-size: 0.78rem;
+    color: #475569;
+  }
+
+  .mob-order-bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 6px;
+    border-top: 1px dashed #cbd5e1;
+  }
+
+  .mob-fee {
+    color: #059669;
+    font-size: 0.9rem;
+  }
+
+  .mob-pay {
+    color: #64748b;
+    font-size: 0.74rem;
+  }
+
+  .modal-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal-card {
+    max-width: 100%;
+    border-radius: 18px 18px 0 0;
+    max-height: 90dvh;
   }
 }
 </style>

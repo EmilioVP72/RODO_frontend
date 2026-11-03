@@ -483,7 +483,7 @@ function switchToLoginWithName() {
   padding: 13px 14px;
   border: 1px solid #cbd5e1;
   border-radius: 9px;
-  font-size: 15px;
+  font-size: 16px;
   box-sizing: border-box;
   transition: border-color 0.2s;
 }

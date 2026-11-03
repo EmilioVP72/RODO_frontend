@@ -2610,17 +2610,90 @@ textarea {
 
 @media (max-width: 640px) {
   .portal-header {
-    padding: 14px 16px;
+    padding: 12px 14px;
+  }
+  .header-inner {
+    gap: 10px;
+  }
+  .logo-box {
+    width: 44px;
+    height: 40px;
+    font-size: 16px;
+  }
+  .brand-text h1 {
+    font-size: 18px;
+  }
+  .brand-text p {
+    font-size: 11px;
+  }
+  .header-restaurant-pill {
+    width: 100%;
+    justify-content: space-between;
+    box-sizing: border-box;
   }
   .portal-main {
-    padding: 0 14px 40px;
-    margin: 16px auto;
+    padding: 0 12px 40px;
+    margin: 14px auto;
+  }
+  .intro-section h2 {
+    font-size: 21px;
+  }
+  .card {
+    padding: 16px 14px;
+    border-radius: 14px;
+  }
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+    padding: 12px;
+  }
+  .scan-box {
+    padding: 14px;
+  }
+  .scan-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .btn-scan {
+    width: 100%;
+    justify-content: center;
+    box-sizing: border-box;
   }
   .fields-grid {
     grid-template-columns: 1fr;
+    gap: 14px;
   }
   .full-width {
     grid-column: auto;
+  }
+  .distance-calc-card {
+    padding: 14px;
+  }
+  .distance-input-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .btn-calc {
+    width: 100%;
+    text-align: center;
+  }
+  .price-result-box.price-ok {
+    padding: 14px;
+  }
+  .price-box-content {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .price-amount-wrapper {
+    width: 100%;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: 10px 16px;
+  }
+  .price-number {
+    font-size: 32px;
   }
   .care-options-grid {
     grid-template-columns: 1fr;
@@ -2628,20 +2701,12 @@ textarea {
   .rider-options-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-  .result-summary-grid {
+  .result-summary-grid,
+  .quick-summary-grid {
     grid-template-columns: 1fr;
   }
   .result-action-buttons {
     grid-template-columns: 1fr;
-  }
-  .brand-text h1 {
-    font-size: 20px;
-  }
-  .intro-section h2 {
-    font-size: 22px;
-  }
-  .card {
-    padding: 18px 16px;
   }
 }
 </style>

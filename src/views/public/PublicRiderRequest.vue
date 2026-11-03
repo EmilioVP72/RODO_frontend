@@ -578,14 +578,24 @@ onMounted(() => {
 }
 
 @media (max-width: 540px) {
+  .rider-req-page {
+    padding: 14px 10px 36px;
+  }
   .req-actions {
     grid-template-columns: 1fr;
+    padding: 10px 16px 20px;
   }
   .req-header {
-    padding: 24px 18px 16px;
+    padding: 20px 16px 14px;
+  }
+  .riders-highlight-card {
+    padding: 16px;
+  }
+  .riders-count-number {
+    font-size: 52px;
   }
   .info-section {
-    padding: 0 18px 16px;
+    padding: 0 16px 16px;
   }
 }
 </style>
