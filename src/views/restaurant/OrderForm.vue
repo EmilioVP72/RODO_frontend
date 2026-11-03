@@ -160,16 +160,14 @@ let autoDistanceTimer = null
 async function autoCalculateRouteDistance(manualTrigger = false) {
   if (!restaurant.value) return
 
-  // Si tiene tarifa fija establecida por el Admin, siempre se usa esa tarifa fija
-  if (hasFixedFee.value) {
-    autoDistanceSuccess.value = true
-    autoDistanceStatus.value = `Tarifa fija establecida para tu local: $${fixedFeeAmount.value.toFixed(2)} MXN.`
-    return
-  }
-
   if (!hasRegisteredLocation.value) {
     if (manualTrigger) {
-      showToast('Tarifa actualizada según la distancia ingresada.', 'info')
+      showToast(
+        hasFixedFee.value
+          ? `Distancia registrada para el ticket. Tu tarifa fija ($${fixedFeeAmount.value.toFixed(2)} MXN) se mantiene.`
+          : 'Tarifa actualizada según la distancia ingresada.',
+        'info'
+      )
     }
     return
   }
@@ -203,11 +201,23 @@ async function autoCalculateRouteDistance(manualTrigger = false) {
     const data = response.data
     if (data.has_fixed_fee && data.fixed_delivery_fee) {
       restaurant.value.fixed_delivery_fee = data.fixed_delivery_fee
-      if (data.distance_km !== null && data.distance_km !== undefined) {
+      if (data.success && data.distance_km !== null && data.distance_km !== undefined) {
         form.distance_km = Number(data.distance_km)
+        autoDistanceSuccess.value = true
+        autoDistanceStatus.value =
+          (data.message || `✓ Distancia calculada: ${Number(data.distance_km).toFixed(1)} km · Tarifa fija: $${Number(data.fixed_delivery_fee).toFixed(2)} MXN.`) +
+          ' (Kilómetros bloqueados para el ticket).'
+        if (manualTrigger) {
+          showToast(`Distancia calculada: ${Number(data.distance_km).toFixed(1)} km`, 'success')
+        }
+      } else {
+        autoDistanceSuccess.value = false
+        autoDistanceStatus.value =
+          data.message || 'No se pudo localizar la dirección exacta. Puedes pegar el enlace de Google Maps o ingresar los km para el ticket.'
+        if (manualTrigger) {
+          showToast(autoDistanceStatus.value, 'info')
+        }
       }
-      autoDistanceSuccess.value = true
-      autoDistanceStatus.value = data.message || `Tarifa fija aplicada: $${Number(data.fixed_delivery_fee).toFixed(2)} MXN.`
       return
     }
 
@@ -238,7 +248,7 @@ async function autoCalculateRouteDistance(manualTrigger = false) {
 watch(
   [() => form.street, () => form.neighborhood, () => form.map_url],
   () => {
-    if (hasFixedFee.value || !hasRegisteredLocation.value) return
+    if (!hasRegisteredLocation.value) return
     const hasMapUrl = Boolean(form.map_url && form.map_url.trim().length > 8)
     const hasAddress = Boolean(
       form.street &&
@@ -703,7 +713,7 @@ async function handleTicketUpload(event) {
     showToast('¡Ticket procesado! Datos distribuidos en el formulario.', 'success')
 
     // Si el restaurante tiene ubicación registrada, calcular distancia automáticamente con los datos del ticket
-    if (!hasFixedFee.value && hasRegisteredLocation.value && (form.street || form.neighborhood)) {
+    if (hasRegisteredLocation.value && (form.street || form.neighborhood)) {
       await autoCalculateRouteDistance(false)
     }
   } catch (err) {
@@ -879,11 +889,10 @@ async function submitOrder() {
     return
   }
 
-  // Si no tiene tarifa fija y aún no hay distancia pero sí tiene ubicación en BD, intentar calcularla antes de validar
+  // Si aún no hay distancia pero sí tiene ubicación en BD (con o sin tarifa fija), intentar calcularla antes de registrar el pedido
   if (
-    !hasFixedFee.value &&
     hasRegisteredLocation.value &&
-    (form.distance_km === '' || form.distance_km === null)
+    (form.distance_km === '' || form.distance_km === null || Number(form.distance_km) === 0)
   ) {
     await autoCalculateRouteDistance(false)
   }
@@ -1278,7 +1287,7 @@ function resetOrderForm() {
                 </label>
                 <p class="distance-sub">
                   <template v-if="hasFixedFee">
-                    Tu local tiene asignada una tarifa fija de entrega en el sistema. Siempre se aplicará esta tarifa automáticamente.
+                    Tu local tiene asignada una tarifa fija de entrega en el sistema. La distancia en kilómetros se calcula para colocarla en el ticket.
                   </template>
                   <template v-else-if="hasRegisteredLocation">
                     Se calcula automáticamente usando la ubicación de tu local en la base de datos y la dirección del pedido.
@@ -1290,9 +1299,9 @@ function resetOrderForm() {
               </div>
             </div>
 
-            <!-- Estado del cálculo automático cuando el restaurante tiene ubicación en BD y NO tiene tarifa fija -->
+            <!-- Estado del cálculo automático cuando el restaurante tiene ubicación en BD (con o sin tarifa fija) -->
             <div
-              v-if="!hasFixedFee && hasRegisteredLocation"
+              v-if="hasRegisteredLocation"
               class="auto-distance-banner"
               :class="{ 'is-loading': autoDistanceLoading, 'is-ok': autoDistanceSuccess }"
             >
@@ -1306,21 +1315,21 @@ function resetOrderForm() {
               </span>
             </div>
 
-            <!-- Input de distancia (Oculto si tiene Tarifa Fija; bloqueado automáticamente tras calcularse con la ubicación del local) -->
-            <div v-if="!hasFixedFee" class="distance-input-row">
+            <!-- Input de distancia (bloqueado automáticamente tras calcularse con la ubicación del local) -->
+            <div class="distance-input-row">
               <div class="input-with-km">
                 <input
                   id="distance_km"
                   v-model.number="form.distance_km"
                   type="number"
                   min="0"
-                  max="5"
+                  :max="hasFixedFee ? 50 : 5"
                   step="0.1"
-                  required
+                  :required="!hasFixedFee"
                   :disabled="autoDistanceSuccess || autoDistanceLoading"
                   :readonly="autoDistanceSuccess || autoDistanceLoading"
                   :class="{ 'input-locked': autoDistanceSuccess }"
-                  :title="autoDistanceSuccess ? 'Distancia calculada automáticamente. No se puede modificar para conservar la tarifa oficial.' : ''"
+                  :title="autoDistanceSuccess ? 'Distancia calculada automáticamente. No se puede modificar.' : ''"
                   :placeholder="hasRegisteredLocation ? 'Se calcula automáticamente (Ej. 2.5)' : 'Ej. 2.5'"
                 >
                 <span class="km-unit-badge" :class="{ 'is-locked': autoDistanceSuccess }">
@@ -1339,10 +1348,14 @@ function resetOrderForm() {
                     autoDistanceLoading
                       ? 'Calculando...'
                       : autoDistanceSuccess
-                        ? '🔒 Tarifa bloqueada'
+                        ? hasFixedFee
+                          ? '🔒 Km calculados'
+                          : '🔒 Tarifa bloqueada'
                         : hasRegisteredLocation
                           ? '🛰️ Calcular con ubicación'
-                          : 'Calcular tarifa'
+                          : hasFixedFee
+                            ? 'Actualizar km'
+                            : 'Calcular tarifa'
                   }}
                 </span>
               </button>
@@ -1370,7 +1383,10 @@ function resetOrderForm() {
                     <span v-if="calculatedFee.isFixed" class="price-distance-pill">
                       📌 Tarifa Fija Preferencial
                     </span>
-                    <span v-else class="price-distance-pill">
+                    <span
+                      v-if="form.distance_km !== '' && form.distance_km !== null && Number(form.distance_km) > 0"
+                      class="price-distance-pill"
+                    >
                       📍 {{ Number(form.distance_km).toFixed(1) }} km de recorrido
                     </span>
                     <span class="price-local-pill">Sucursal: {{ restaurant.name }}</span>
