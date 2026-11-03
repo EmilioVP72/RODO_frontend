@@ -214,9 +214,11 @@ async function autoCalculateRouteDistance(manualTrigger = false) {
     if (data.success && data.distance_km !== null && data.distance_km !== undefined) {
       form.distance_km = Number(data.distance_km)
       autoDistanceSuccess.value = true
-      autoDistanceStatus.value = data.message || `✓ Distancia calculada automáticamente: ${Number(data.distance_km).toFixed(1)} km.`
+      autoDistanceStatus.value =
+        (data.message || `✓ Distancia calculada automáticamente: ${Number(data.distance_km).toFixed(1)} km.`) +
+        ' (Kilómetros bloqueados para proteger la tarifa oficial).'
       if (manualTrigger) {
-        showToast(`Distancia calculada: ${Number(data.distance_km).toFixed(1)} km`, 'success')
+        showToast(`Distancia calculada y bloqueada: ${Number(data.distance_km).toFixed(1)} km`, 'success')
       }
     } else {
       autoDistanceSuccess.value = false
@@ -244,7 +246,13 @@ watch(
       form.neighborhood &&
       form.neighborhood.trim().length >= 2
     )
-    if (!hasMapUrl && !hasAddress) return
+    if (!hasMapUrl && !hasAddress) {
+      if (autoDistanceTimer) clearTimeout(autoDistanceTimer)
+      autoDistanceSuccess.value = false
+      autoDistanceStatus.value = ''
+      form.distance_km = ''
+      return
+    }
 
     if (autoDistanceTimer) clearTimeout(autoDistanceTimer)
     autoDistanceTimer = setTimeout(() => {
@@ -1289,7 +1297,7 @@ function resetOrderForm() {
               :class="{ 'is-loading': autoDistanceLoading, 'is-ok': autoDistanceSuccess }"
             >
               <span v-if="autoDistanceLoading" class="mini-spinner" />
-              <span v-else>{{ autoDistanceSuccess ? '🛰️' : '📍' }}</span>
+              <span v-else>{{ autoDistanceSuccess ? '🔒' : '📍' }}</span>
               <span>
                 {{
                   autoDistanceStatus ||
@@ -1298,7 +1306,7 @@ function resetOrderForm() {
               </span>
             </div>
 
-            <!-- Input de distancia (Oculto o secundario si tiene Tarifa Fija; automático/editable si es por distancia) -->
+            <!-- Input de distancia (Oculto si tiene Tarifa Fija; bloqueado automáticamente tras calcularse con la ubicación del local) -->
             <div v-if="!hasFixedFee" class="distance-input-row">
               <div class="input-with-km">
                 <input
@@ -1309,23 +1317,32 @@ function resetOrderForm() {
                   max="5"
                   step="0.1"
                   required
+                  :disabled="autoDistanceSuccess || autoDistanceLoading"
+                  :readonly="autoDistanceSuccess || autoDistanceLoading"
+                  :class="{ 'input-locked': autoDistanceSuccess }"
+                  :title="autoDistanceSuccess ? 'Distancia calculada automáticamente. No se puede modificar para conservar la tarifa oficial.' : ''"
                   :placeholder="hasRegisteredLocation ? 'Se calcula automáticamente (Ej. 2.5)' : 'Ej. 2.5'"
                 >
-                <span class="km-unit-badge">km</span>
+                <span class="km-unit-badge" :class="{ 'is-locked': autoDistanceSuccess }">
+                  {{ autoDistanceSuccess ? '🔒 km' : 'km' }}
+                </span>
               </div>
               <button
                 type="button"
                 class="btn-calc"
-                :disabled="autoDistanceLoading"
+                :class="{ 'btn-calc-locked': autoDistanceSuccess }"
+                :disabled="autoDistanceLoading || autoDistanceSuccess"
                 @click="autoCalculateRouteDistance(true)"
               >
                 <span>
                   {{
                     autoDistanceLoading
                       ? 'Calculando...'
-                      : hasRegisteredLocation
-                        ? '🛰️ Calcular con ubicación'
-                        : 'Calcular tarifa'
+                      : autoDistanceSuccess
+                        ? '🔒 Tarifa bloqueada'
+                        : hasRegisteredLocation
+                          ? '🛰️ Calcular con ubicación'
+                          : 'Calcular tarifa'
                   }}
                 </span>
               </button>
@@ -2118,7 +2135,17 @@ textarea {
 
 .input-with-km input {
   width: 100%;
-  padding-right: 54px;
+  padding-right: 76px;
+}
+
+.input-with-km input.input-locked,
+.input-with-km input:disabled {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #334155;
+  font-weight: 700;
+  cursor: not-allowed;
+  user-select: none;
 }
 
 .km-unit-badge {
@@ -2133,6 +2160,12 @@ textarea {
   padding: 2px 8px;
   border-radius: 6px;
   pointer-events: none;
+}
+
+.km-unit-badge.is-locked {
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #86efac;
 }
 
 .btn-calc {
@@ -2151,9 +2184,17 @@ textarea {
   font-size: 14px;
 }
 
-.btn-calc:hover {
+.btn-calc:hover:not(:disabled) {
   background: #fff5f5;
   border-color: #d71920;
+}
+
+.btn-calc.btn-calc-locked,
+.btn-calc:disabled {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #64748b;
+  cursor: not-allowed;
 }
 
 /* Caja de Tarifa Prominente */
