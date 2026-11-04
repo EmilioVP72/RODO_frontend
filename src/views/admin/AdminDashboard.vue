@@ -2029,6 +2029,7 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 12px;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .topbar-title-group {
@@ -2056,6 +2057,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .view-mode-pills {
@@ -3683,8 +3685,53 @@ onUnmounted(() => {
     gap: 12px;
   }
 
+  .admin-topbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .topbar-title-group {
+    width: 100%;
+  }
+
+  .admin-topbar h2 {
+    font-size: 1.18rem;
+    line-height: 1.25;
+  }
+
   .topbar-subtitle-inline {
     display: none;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .view-mode-pills {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .mode-pill {
+    text-align: center;
+    justify-content: center;
+  }
+
+  .chart-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .table-header-row {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .filters-strip {

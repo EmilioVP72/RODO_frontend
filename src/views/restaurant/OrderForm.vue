@@ -326,13 +326,190 @@ const calculatedFee = computed(() => {
   }
 })
 
-// Módulo de OCR / Escaneo de ticket
+// Módulo de OCR / Escaneo inteligente de ticket (Preprocesamiento adaptativo + Parser multipaso)
 const ticketFileInput = ref(null)
+const ticketGalleryInput = ref(null)
 const imagePreview = ref('')
-const ocrStatus = ref('La lectura automática procesa el ticket en tu navegador para agilizar la captura.')
+const ocrStatus = ref('Toma una foto nítida del ticket o pega el texto del pedido para distribuir los datos automáticamente.')
 const ocrLoading = ref(false)
+const ocrRawText = ref('')
+const showOcrTextEditor = ref(false)
+const ocrDetectedFields = ref([])
 
-// Función inteligente para descomponer y repartir los datos del ticket en cada campo del formulario
+// Preprocesamiento de imagen con normalización local de iluminación (elimina sombras de papel térmico)
+async function preprocessImageForOcr(file) {
+  return new Promise((resolve) => {
+    const img = new Image()
+    const objectUrl = URL.createObjectURL(file)
+
+    img.onload = () => {
+      try {
+        const origW = img.naturalWidth || img.width
+        const origH = img.naturalHeight || img.height
+
+        // Escalar a resolución óptima para OCR de recibos (~1600px de lado mayor)
+        const targetMax = 1650
+        const targetMin = 1000
+        let scale = 1
+        const maxSide = Math.max(origW, origH)
+        if (maxSide > targetMax) {
+          scale = targetMax / maxSide
+        } else if (maxSide < targetMin) {
+          scale = targetMin / maxSide
+        }
+
+        const w = Math.max(1, Math.round(origW * scale))
+        const h = Math.max(1, Math.round(origH * scale))
+
+        // Canvas 1: Escala de grises con estiramiento de contraste (Pass B)
+        const grayCanvas = document.createElement('canvas')
+        grayCanvas.width = w
+        grayCanvas.height = h
+        const grayCtx = grayCanvas.getContext('2d')
+        grayCtx.drawImage(img, 0, 0, w, h)
+
+        const imgData = grayCtx.getImageData(0, 0, w, h)
+        const data = imgData.data
+        const lum = new Uint8Array(w * h)
+
+        let minL = 255
+        let maxL = 0
+        for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+          const l = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
+          lum[p] = l
+          if (l < minL) minL = l
+          if (l > maxL) maxL = l
+        }
+
+        const range = Math.max(1, maxL - minL)
+        for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+          const norm = Math.round(((lum[p] - minL) / range) * 255)
+          lum[p] = norm
+          const contrasted = norm < 128 ? Math.max(0, Math.round(norm * 0.85)) : Math.min(255, Math.round(norm * 1.08))
+          data[i] = contrasted
+          data[i + 1] = contrasted
+          data[i + 2] = contrasted
+        }
+        grayCtx.putImageData(imgData, 0, 0)
+
+        // Canvas 2: Umbralización adaptativa local (Integral Image) para tickets térmicos con sombra (Pass A)
+        const binCanvas = document.createElement('canvas')
+        binCanvas.width = w
+        binCanvas.height = h
+        const binCtx = binCanvas.getContext('2d')
+        const binData = binCtx.createImageData(w, h)
+        const bPixels = binData.data
+
+        const integral = new Float64Array((w + 1) * (h + 1))
+        const stride = w + 1
+        for (let y = 1; y <= h; y++) {
+          let rowSum = 0
+          const srcRow = (y - 1) * w
+          const dstRow = y * stride
+          const prevRow = (y - 1) * stride
+          for (let x = 1; x <= w; x++) {
+            rowSum += lum[srcRow + x - 1]
+            integral[dstRow + x] = integral[prevRow + x] + rowSum
+          }
+        }
+
+        const radius = Math.max(12, Math.round(Math.min(w, h) / 28))
+        for (let y = 0; y < h; y++) {
+          const y1 = Math.max(0, y - radius)
+          const y2 = Math.min(h - 1, y + radius)
+          const hWin = y2 - y1 + 1
+          for (let x = 0; x < w; x++) {
+            const x1 = Math.max(0, x - radius)
+            const x2 = Math.min(w - 1, x + radius)
+            const area = (x2 - x1 + 1) * hWin
+            const sum =
+              integral[(y2 + 1) * stride + (x2 + 1)] -
+              integral[y1 * stride + (x2 + 1)] -
+              integral[(y2 + 1) * stride + x1] +
+              integral[y1 * stride + x1]
+
+            const localMean = sum / area
+            const pVal = lum[y * w + x]
+            // Si el píxel es significativamente más oscuro que el fondo local del papel, es tinta
+            const isInk = pVal < localMean * 0.87 && pVal < 215
+            const out = isInk ? Math.max(0, Math.round((pVal / Math.max(1, localMean)) * 60)) : 255
+            const idx = (y * w + x) * 4
+            bPixels[idx] = out
+            bPixels[idx + 1] = out
+            bPixels[idx + 2] = out
+            bPixels[idx + 3] = 255
+          }
+        }
+        binCtx.putImageData(binData, 0, 0)
+
+        URL.revokeObjectURL(objectUrl)
+        resolve({ adaptiveCanvas: binCanvas, grayCanvas })
+      } catch {
+        URL.revokeObjectURL(objectUrl)
+        resolve({ adaptiveCanvas: file, grayCanvas: file })
+      }
+    }
+
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      resolve({ adaptiveCanvas: file, grayCanvas: file })
+    }
+
+    img.src = objectUrl
+  })
+}
+
+// Normaliza confusiones típicas del OCR en secuencias numéricas (O->0, l/I->1, S->5)
+function normalizeOcrDigits(str) {
+  if (!str) return ''
+  return str
+    .replace(/(?<=\d)[OoQq](?=\d)/g, '0')
+    .replace(/(?<=[$#\s])[Oo](?=\d)/g, '0')
+    .replace(/(?<=\d)[Oo](?=[\s.,]|$)/g, '0')
+    .replace(/(?<=\d)[lI|](?=\d)/g, '1')
+    .replace(/(?<=[$#\s])[lI|](?=\d)/g, '1')
+    .replace(/(?<=\d)[lI|](?=[\s.,]|$)/g, '1')
+    .replace(/(?<=\d)[Ss](?=\d{2})/g, '5')
+}
+
+// Convierte montos como "$1,250.50", "419.00", "$ 320,00" a número real sin truncar en la coma de miles
+function parseMoneyAmount(rawStr) {
+  if (!rawStr) return null
+  let s = normalizeOcrDigits(String(rawStr).trim())
+  s = s.replace(/[^0-9.,]/g, '')
+  if (!s) return null
+
+  // Si tiene coma y punto (ej. 1,250.50 o 1.250,50)
+  if (s.includes(',') && s.includes('.')) {
+    if (s.lastIndexOf('.') > s.lastIndexOf(',')) {
+      s = s.replace(/,/g, '')
+    } else {
+      s = s.replace(/\./g, '').replace(',', '.')
+    }
+  } else if (s.includes(',')) {
+    // Si termina con ,XX (2 decimales) es coma decimal; si termina con ,XXX (3 dígitos) es separador de miles
+    const parts = s.split(',')
+    if (parts[parts.length - 1].length === 3 && parts.length === 2 && Number(parts[0]) >= 1) {
+      s = s.replace(/,/g, '')
+    } else {
+      s = s.replace(',', '.')
+    }
+  }
+
+  const val = parseFloat(s)
+  return Number.isFinite(val) && val > 0 ? val : null
+}
+
+// Limpia artefactos de bordes de ticket térmico en una línea
+function cleanOcrLine(line) {
+  if (!line) return ''
+  return line
+    .replace(/^[|¦!¡*~_—–·•\s]+|[|¦*~_—–·•\s]+$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+// Función inteligente multipaso para descomponer y repartir los datos del ticket en cada campo del formulario
 function parseTicketText(rawText, currentRestaurantName = '') {
   const parsed = {
     customer_name: '',
@@ -340,6 +517,7 @@ function parseTicketText(rawText, currentRestaurantName = '') {
     street: '',
     neighborhood: '',
     address_reference: '',
+    map_url: '',
     amount_to_collect: null,
     payment_method: '',
     needs_change: false,
@@ -352,202 +530,349 @@ function parseTicketText(rawText, currentRestaurantName = '') {
 
   if (!rawText || typeof rawText !== 'string') return parsed
 
-  const rawLines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  const rawLines = rawText
+    .split(/\r?\n/)
+    .map((l) => cleanOcrLine(l))
+    .filter((l) => l.length >= 2 && !/^[-=*_.~#/:;,\s]+$/.test(l))
+
+  if (!rawLines.length) return parsed
+
   const consumedIndices = new Set()
+  const restNameNorm = (currentRestaurantName || '').toLowerCase().trim()
 
-  // 1. Teléfono del cliente (10 dígitos)
-  const phoneRegexLabeled = /(?:tel(?:[eé]fono)?|cel(?:ular)?|whatsapp|wa|m[oó]vil|contacto)[\s:#.-]*(\+?52[\s-]?)?(\(?\d{2,3}\)?[\s.-]?)?\d{3,4}[\s.-]?\d{4}/i
-  const phoneRegexGeneric = /(?:\+?52[\s-]?)?(?:\(?\d{2,3}\)?[\s.-]?)?\d{3,4}[\s.-]?\d{4}/
+  // Identificar líneas de cabecera del restaurante (primeras líneas con RFC, Régimen, Sucursal, nombre del local, etc.)
+  const headerIndices = new Set()
+  for (let i = 0; i < Math.min(rawLines.length, 7); i++) {
+    const l = rawLines[i].toLowerCase()
+    if (
+      (restNameNorm && restNameNorm.length >= 3 && l.includes(restNameNorm)) ||
+      /\b(?:rfc|r\.f\.c\.|r[eé]gimen|sucursal|matriz|ticket\s*(?:de\s*venta|#)|folio|cajero|mesero|atendi[oó]|fecha|hora|turno|caja)\b/i.test(l)
+    ) {
+      headerIndices.add(i)
+    }
+  }
 
+  // Detectar si existe un bloque explícito de "DATOS DEL CLIENTE / DOMICILIO / ENVÍO"
+  let deliverySectionStart = -1
+  for (let i = 0; i < rawLines.length; i++) {
+    if (/\b(?:datos\s+del?\s+(?:cliente|env[ií]o|domicilio)|servicio\s+a\s+domicilio|entrega\s+a\s+domicilio|enviar\s+a|para\s+entregar)\b/i.test(rawLines[i])) {
+      deliverySectionStart = i
+      consumedIndices.add(i)
+      break
+    }
+  }
+
+  // 0. Enlace de Google Maps si viene en el texto (ej. al pegar de WhatsApp)
+  for (let i = 0; i < rawLines.length; i++) {
+    const urlMatch = rawLines[i].match(/(https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl\/maps|(?:www\.)?google\.com\/maps)[^\s]+)/i)
+    if (urlMatch) {
+      parsed.map_url = urlMatch[1]
+      consumedIndices.add(i)
+      break
+    }
+  }
+
+  // 1. Teléfono del cliente (10 dígitos, corrigiendo confusiones OCR como O->0 y l->1)
+  const phoneLabelRegex = /\b(?:tel(?:[eé]fono|ef)?|cel(?:ular)?|whatsapp|wa|m[oó]vil|contacto|llamar(?:\s*a)?|cliente\s*tel)\b[\s:#.-]*(.*)$/i
+  const extractTenDigitPhone = (str) => {
+    const normalized = normalizeOcrDigits(str)
+    // Ignorar fechas tipo 04/11/2026 o horas o RFC
+    const withoutDates = normalized.replace(/\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b/g, ' ').replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, ' ')
+    const candidates = withoutDates.match(/(?:\+?52[\s.-]*)?(?:\(?\d{2,3}\)?[\s.-]*)?\d{3,4}[\s.-]*\d{3,4}(?:[\s.-]*\d{2,4})?/g) || []
+    for (const cand of candidates) {
+      const digits = cand.replace(/\D/g, '')
+      const ten = digits.length === 12 && digits.startsWith('52') ? digits.slice(2) : digits.length === 10 ? digits : ''
+      if (ten.length === 10 && !ten.startsWith('00') && !ten.startsWith('199') && !ten.startsWith('202')) {
+        return { phone: ten, rawMatch: cand }
+      }
+    }
+    return null
+  }
+
+  // Paso 1A: Teléfono con etiqueta explícita (priorizando fuera del encabezado del restaurante)
+  const labeledPhones = []
   for (let i = 0; i < rawLines.length; i++) {
     const line = rawLines[i]
-    const match = line.match(phoneRegexLabeled)
-    if (match) {
-      const digits = match[0].replace(/\D/g, '').slice(-10)
-      if (digits.length === 10) {
-        parsed.customer_phone = digits
-        if (line.replace(phoneRegexLabeled, '').trim().length < 4) {
-          consumedIndices.add(i)
+    const m = line.match(phoneLabelRegex)
+    if (m) {
+      const sameLinePhone = extractTenDigitPhone(m[1] || line)
+      if (sameLinePhone) {
+        labeledPhones.push({ index: i, nextLine: false, ...sameLinePhone, isHeader: headerIndices.has(i) && i < 3 })
+      } else if (i + 1 < rawLines.length) {
+        const nextLinePhone = extractTenDigitPhone(rawLines[i + 1])
+        if (nextLinePhone) {
+          labeledPhones.push({ index: i, nextLine: true, ...nextLinePhone, isHeader: false })
         }
-        break
       }
     }
   }
 
+  if (labeledPhones.length > 0) {
+    // Si hay más de un teléfono etiquetado, el primero en el top suele ser el del restaurante y el siguiente el del cliente
+    const chosen = labeledPhones.find((p) => !p.isHeader && p.index >= (deliverySectionStart > -1 ? deliverySectionStart : 1)) || labeledPhones[labeledPhones.length - 1]
+    parsed.customer_phone = chosen.phone
+    if (chosen.nextLine) {
+      consumedIndices.add(chosen.index)
+      consumedIndices.add(chosen.index + 1)
+    } else {
+      const remainder = rawLines[chosen.index].replace(phoneLabelRegex, '').trim()
+      if (remainder.length < 4) {
+        consumedIndices.add(chosen.index)
+      }
+    }
+  }
+
+  // Paso 1B: Teléfono sin etiqueta si no se encontró con etiqueta
   if (!parsed.customer_phone) {
+    const genericPhones = []
     for (let i = 0; i < rawLines.length; i++) {
-      const line = rawLines[i]
-      if (/\b(?:202\d|19\d\d)\b/.test(line) && line.includes('/')) continue
-      const match = line.match(phoneRegexGeneric)
-      if (match) {
-        const digits = match[0].replace(/\D/g, '').slice(-10)
-        if (digits.length === 10 && !digits.startsWith('00') && !digits.startsWith('202')) {
-          parsed.customer_phone = digits
-          if (line.replace(phoneRegexGeneric, '').trim().length < 4) {
-            consumedIndices.add(i)
-          }
-          break
-        }
+      if (consumedIndices.has(i)) continue
+      const found = extractTenDigitPhone(rawLines[i])
+      if (found) {
+        genericPhones.push({ index: i, ...found, isHeader: i < 2 && rawLines.length > 5 })
+      }
+    }
+    if (genericPhones.length > 0) {
+      const chosen = genericPhones.find((p) => !p.isHeader) || genericPhones[genericPhones.length - 1]
+      parsed.customer_phone = chosen.phone
+      const cleaned = normalizeOcrDigits(rawLines[chosen.index]).replace(chosen.rawMatch, '').replace(/[^a-záéíóúñ]/gi, '')
+      if (cleaned.length < 4) {
+        consumedIndices.add(chosen.index)
       }
     }
   }
 
-  // 2. Nombre del cliente (con etiqueta explícita)
-  const nameRegex = /(?:cliente|nombre(?: del cliente)?|para|destinatario|at(?:['’]n|enci[oó]n)|entregar a|orden a nombre de)[\s:#.-]+(.+)/i
+  // 2. Nombre del cliente (con soporte multilínea: "CLIENTE:\nJuan Pérez")
+  const nameLabelRegex = /^(?:nombre\s+del\s+cliente|cliente|nombre|para|destinatario|recibe|entregar\s+a|pedido\s+de|orden\s+a\s+nombre\s+de|a\s+nombre\s+de|at['’]?n|atenci[oó]n)\b[\s:#.-]*(.*)$/i
   for (let i = 0; i < rawLines.length; i++) {
     const line = rawLines[i]
-    const match = line.match(nameRegex)
+    const match = line.match(nameLabelRegex)
     if (match) {
-      let nameVal = match[1].trim()
-      nameVal = nameVal.replace(phoneRegexGeneric, '').replace(/tel.*$/i, '').trim()
-      nameVal = nameVal.replace(/^[-:#.\s]+|[-:#.\s]+$/g, '')
-      if (nameVal.length >= 2) {
-        parsed.customer_name = nameVal
+      let candidate = (match[1] || '').trim()
+      let usedNextLine = false
+
+      // Si en la misma línea solo estaba la etiqueta "CLIENTE:" y el valor está en la línea siguiente
+      if (candidate.length < 2 && i + 1 < rawLines.length && !consumedIndices.has(i + 1)) {
+        const nextLine = rawLines[i + 1].trim()
+        if (!/^(?:direcci[oó]n|domicilio|calle|colonia|tel|cel|total|subtotal|pago)/i.test(nextLine)) {
+          candidate = nextLine
+          usedNextLine = true
+        }
+      }
+
+      // Limpiar si en la misma línea viene "Cliente: Juan Pérez Tel: 415..."
+      candidate = candidate
+        .replace(/\b(?:tel(?:[eé]fono)?|cel(?:ular)?|whatsapp|domicilio|direcci[oó]n|colonia)\b.*$/i, '')
+        .replace(/(?:\+?52[\s.-]*)?\d{3}[\s.-]*\d{3}[\s.-]*\d{4}/g, '')
+        .replace(/^[-:#.\s]+|[-:#.\s]+$/g, '')
+        .trim()
+
+      if (candidate.length >= 2 && !/^(?:general|mostrador|p[uú]blico\s+en\s+general|venta\s+mostrador|sin\s+nombre|n\/a)$/i.test(candidate)) {
+        parsed.customer_name = candidate
         consumedIndices.add(i)
+        if (usedNextLine) consumedIndices.add(i + 1)
         break
       }
     }
   }
 
-  // 3. Dirección: Calle y número, Colonia, Referencias
-  const addressRegex = /(?:direcci[oó]n|domicilio|dir|entrega(?: en)?|enviar a|calle y n[uú]mero)[\s:#.-]+(.+)/i
-  const colOnlyRegex = /^(?:colonia|col\.?|fracc(?:ionamiento)?|barrio|frac\.?)[\s:#.-]+(.+)$/i
-  const refRegex = /^(?:ref(?:erencias?)?|cruzamientos?|entre calles?|entre|cruce|fachada|port[oó]n|color)[\s:#.-]*(.+)$/i
+  // 3. Dirección, Colonia y Referencias (con soporte multilínea y separación inteligente)
+  const addrLabelRegex = /^(?:direcci[oó]n\s+de\s+entrega|direcci[oó]n|domicilio|dir\.?|entrega\s+en|enviar\s+a|calle\s+y\s+n[uú]mero|calle|ubicaci[oó]n)\b[\s:#.-]*(.*)$/i
+  const colLabelRegex = /^(?:colonia|col\.?|fraccionamiento|fracc\.?|frac\.?|barrio|residencial|unidad\s+hab(?:itacional)?|infonavit|zona)\b[\s:#.-]*(.*)$/i
+  const refLabelRegex = /^(?:referencias?|ref\.?|entre\s+calles?|cruzamientos?|entre|cruce|fachada|port[oó]n|color\s+de\s+casa|indicaciones\s+de\s+entrega)\b[\s:#.-]*(.*)$/i
+
+  // Función auxiliar para separar Calle, Colonia y Referencia cuando vienen en una misma cadena
+  const splitCombinedAddress = (fullAddr) => {
+    let work = fullAddr.trim()
+    let extStreet = ''
+    let extCol = ''
+    let extRef = ''
+
+    // Extraer referencia explícita al final ("... Ref: portón negro" o "... entre X y Y")
+    const refSplit = work.match(/^(.*?)(?:[,;]\s*|\s+)(?:ref(?:erencias?)?[:.\s-]+|entre\s+calles\s+|frente\s+a\s+|casa\s+color\s+|port[oó]n\s+)(.+)$/i)
+    if (refSplit && refSplit[1].length >= 4) {
+      work = refSplit[1].trim()
+      extRef = refSplit[2].trim()
+    }
+
+    // Extraer colonia explícita ("... Col. San Antonio" / "... Fracc. La Lomita" / "... Barrio de ...")
+    const colSplit = work.match(/^(.*?)(?:[,;-]\s*|\s+)\b(col(?:onia|\.)?|fracc(?:ionamiento|\.)?|frac\.?|barrio|residencial|infonavit|u\.\s*hab\.?)\s*[:.-]?\s*(.+)$/i)
+    if (colSplit && colSplit[1].length >= 3) {
+      extStreet = colSplit[1].trim().replace(/[,;-]+$/, '').trim()
+      const colPrefix = /^(?:fracc|barrio|residencial|infonavit)/i.test(colSplit[2]) ? `${colSplit[2]} ` : ''
+      extCol = (colPrefix + colSplit[3]).replace(/\s{2,}/g, ' ').trim()
+    } else {
+      // Si viene separado por coma: "Av. Independencia 120, Centro"
+      const commaParts = work.split(',').map((p) => p.trim()).filter(Boolean)
+      if (commaParts.length >= 2 && /\d/.test(commaParts[0]) && commaParts[1].length >= 3 && !/^\d+$/.test(commaParts[1])) {
+        extStreet = commaParts[0]
+        extCol = commaParts[1]
+        if (commaParts.length >= 3 && !extRef) {
+          extRef = commaParts.slice(2).join(', ')
+        }
+      } else {
+        extStreet = work
+      }
+    }
+
+    return { extStreet, extCol, extRef }
+  }
 
   for (let i = 0; i < rawLines.length; i++) {
     if (consumedIndices.has(i)) continue
     const line = rawLines[i]
 
-    // Si tiene etiqueta explícita de dirección: "Dirección: Calle 65..."
-    const addrMatch = line.match(addressRegex)
-    if (addrMatch && !parsed.street) {
-      parsed.street = addrMatch[1].trim().replace(/^[-:#.\s]+|[-:#.\s]+$/g, '')
-      consumedIndices.add(i)
-      continue
-    }
-
-    // Si la línea contiene calle Y colonia juntos: "Calle 45 #200 x 28 y 30 Col. Industrial"
-    const streetAndColMatch = line.match(/^(.*?)(?:,\s*|\s+)(?:colonia|col\.?|fracc(?:ionamiento)?|frac\.?)\s*[:.-]?\s*(.*)$/i)
-    if (streetAndColMatch && /\b(calle|c\.|av\.?|avenida|blvd\.?|#)\b/i.test(streetAndColMatch[1])) {
-      if (!parsed.street) parsed.street = streetAndColMatch[1].trim()
-      if (!parsed.neighborhood && streetAndColMatch[2]) parsed.neighborhood = streetAndColMatch[2].trim()
-      consumedIndices.add(i)
-      continue
-    }
-
-    // Si es sólo colonia
-    const colMatch = line.match(colOnlyRegex)
+    // 3A. Etiqueta explícita de Colonia
+    const colMatch = line.match(colLabelRegex)
     if (colMatch && !parsed.neighborhood) {
-      parsed.neighborhood = colMatch[1].trim().replace(/^[-:#.\s]+|[-:#.\s]+$/g, '')
-      consumedIndices.add(i)
-      continue
+      let colVal = (colMatch[1] || '').trim()
+      if (colVal.length < 2 && i + 1 < rawLines.length && !consumedIndices.has(i + 1)) {
+        colVal = rawLines[i + 1].trim()
+        consumedIndices.add(i + 1)
+      }
+      if (colVal.length >= 2) {
+        // Si la etiqueta era Fracc. o Barrio, conservar el tipo si aporta claridad
+        const labelWord = line.match(/^(fracc(?:ionamiento)?|barrio|residencial|infonavit)/i)
+        parsed.neighborhood = labelWord && !colVal.toLowerCase().startsWith(labelWord[1].toLowerCase())
+          ? `${labelWord[1]} ${colVal}`.trim()
+          : colVal.replace(/^[-:#.,\s]+|[-:#.,\s]+$/g, '')
+        consumedIndices.add(i)
+        continue
+      }
     }
 
-    // Si es referencia
-    const refMatch = line.match(refRegex)
+    // 3B. Etiqueta explícita de Referencia
+    const refMatch = line.match(refLabelRegex)
     if (refMatch && !parsed.address_reference) {
-      parsed.address_reference = line.trim().replace(/^[-:#.\s]+|[-:#.\s]+$/g, '')
+      let refVal = (refMatch[1] || '').trim()
+      if (/^entre\b/i.test(line) && refVal) {
+        refVal = `Entre ${refVal}`
+      } else if (refVal.length < 2 && i + 1 < rawLines.length && !consumedIndices.has(i + 1)) {
+        refVal = rawLines[i + 1].trim()
+        consumedIndices.add(i + 1)
+      }
+      if (refVal.length >= 2) {
+        parsed.address_reference = refVal.replace(/^[-:#.,\s]+|[-:#.,\s]+$/g, '')
+        consumedIndices.add(i)
+        continue
+      }
+    }
+
+    // 3C. Etiqueta explícita de Dirección / Domicilio
+    const addrMatch = line.match(addrLabelRegex)
+    if (addrMatch && !parsed.street) {
+      let addrVal = (addrMatch[1] || '').trim()
       consumedIndices.add(i)
+
+      // Si "DOMICILIO:" venía solo en su línea, tomar la línea siguiente
+      if (addrVal.length < 3 && i + 1 < rawLines.length && !consumedIndices.has(i + 1)) {
+        addrVal = rawLines[i + 1].trim()
+        consumedIndices.add(i + 1)
+        i++
+      }
+
+      if (addrVal.length >= 3) {
+        const { extStreet, extCol, extRef } = splitCombinedAddress(addrVal)
+        parsed.street = extStreet
+        if (extCol && !parsed.neighborhood) parsed.neighborhood = extCol
+        if (extRef && !parsed.address_reference) parsed.address_reference = extRef
+
+        // Revisar si la línea inmediatamente siguiente es la continuación de la colonia
+        if (!parsed.neighborhood && i + 1 < rawLines.length && !consumedIndices.has(i + 1)) {
+          const nextLine = rawLines[i + 1].trim()
+          const nextColMatch = nextLine.match(colLabelRegex)
+          if (nextColMatch && nextColMatch[1]) {
+            parsed.neighborhood = nextColMatch[1].trim()
+            consumedIndices.add(i + 1)
+            i++
+          } else if (
+            nextLine.length >= 3 &&
+            nextLine.length <= 40 &&
+            !/\d{3,}/.test(nextLine) &&
+            !/\$/.test(nextLine) &&
+            !/^\d+\s+[a-z]/i.test(nextLine) &&
+            !/\b(?:total|subtotal|efectivo|tarjeta|transferencia|paga|cambio|tel|cliente|nota)\b/i.test(nextLine)
+          ) {
+            parsed.neighborhood = nextLine.replace(/^(?:col\.?|colonia)\s*/i, '').trim()
+            consumedIndices.add(i + 1)
+            i++
+          }
+        }
+      }
       continue
     }
   }
 
-  // Patrones naturales de calle si no se detectó por etiqueta
+  // 3D. Si no tenía etiqueta "Dirección:", buscar líneas con patrón de calle (evitando encabezado del local)
   if (!parsed.street) {
-    for (let i = 0; i < rawLines.length; i++) {
-      if (consumedIndices.has(i)) continue
+    const startIdx = deliverySectionStart > -1 ? deliverySectionStart : (rawLines.length > 6 ? 1 : 0)
+    for (let i = startIdx; i < rawLines.length; i++) {
+      if (consumedIndices.has(i) || headerIndices.has(i)) continue
       const line = rawLines[i]
-      const isStreetPattern =
-        /\b(calle|callej[oó]n|av\.?|avenida|blvd\.?|boulevard|circuito|andador|retorno|diag\.?|diagonal|ampliaci[oó]n|privada|cerrada|c\.)\s+[0-9a-záéíóúñ#.-]+/i.test(line) ||
-        (/#\s*\d+/i.test(line) && !/ticket|folio|orden\s*#|pedido\s*#|mesa/i.test(line))
+      if (/\$|\b(?:total|subtotal|cambio|efectivo|pizza|hamburguesa|tacos?|refresco|orden|combos?)\b/i.test(line)) continue
 
-      if (isStreetPattern) {
-        parsed.street = line
+      const looksLikeStreet =
+        /\b(?:calle|callej[oó]n|av\.?|avenida|blvd\.?|boulevard|circuito|andador|retorno|priv(?:ada|\.)?|cerrada|prol(?:ongaci[oó]n|\.)?|camino|carretera|c\.)\s+[a-záéíóúñ0-9]/i.test(line) ||
+        (/\b[a-záéíóúñ]{3,}(?:\s+[a-záéíóúñ]{2,})*\s+(?:#|no\.?\s*|n[uú]m\.?\s*)\d+/i.test(line) && !/\b(?:ticket|folio|orden|pedido|mesa|cajero|sucursal)\b/i.test(line))
+
+      if (looksLikeStreet) {
+        const { extStreet, extCol, extRef } = splitCombinedAddress(line)
+        parsed.street = extStreet
+        if (extCol && !parsed.neighborhood) parsed.neighborhood = extCol
+        if (extRef && !parsed.address_reference) parsed.address_reference = extRef
         consumedIndices.add(i)
         break
       }
     }
   }
 
-  // Separar colonia y referencias si quedaron embebidas en street
-  if (parsed.street) {
-    const splitColMatch = parsed.street.match(/^(.*?)(?:,\s*|\s+)(?:colonia|col\.?|fracc(?:ionamiento)?|frac\.?)\s*[:.-]?\s*(.*)$/i)
-    if (splitColMatch) {
-      parsed.street = splitColMatch[1].trim()
-      if (!parsed.neighborhood && splitColMatch[2]) {
-        parsed.neighborhood = splitColMatch[2].trim()
-      }
-    }
+  // 4. Importe a cobrar (Total del ticket) — Búsqueda de abajo hacia arriba para tomar el TOTAL FINAL
+  const totalLabelRegex = /\b(?:total\s+a\s+pagar|gran\s+total|total\s+neto|monto\s+a\s+cobrar|importe\s+total|a\s+pagar|total\s+mxn|cobrar\s+al\s+cliente|total)\b[\s:#$.-]*([$]?\s*[0-9OolI]{1,3}(?:[.,][0-9OolI]{3})*(?:[.,][0-9OolI]{1,2})?)?/i
+  const excludedTotalLineRegex = /\b(?:sub\s*-?\s*total|subtotal|total\s+de\s+art[ií]culos|total\s+art[ií]culos|total\s+productos|total\s+descuento|total\s+iva|iva|impuestos?|propina)\b/i
 
-    if (parsed.neighborhood && !parsed.address_reference) {
-      const refInCol = parsed.neighborhood.match(/^(.*?)(?:,\s*|\s+)(?:ref(?:erencias?)?|cruzamientos?|entre calles?|entre|frente a|fachada)[:\s.-]+(.*)$/i)
-      if (refInCol) {
-        parsed.neighborhood = refInCol[1].trim()
-        parsed.address_reference = refInCol[2].trim()
-      }
-    }
-
-    if (!parsed.address_reference) {
-      const crossMatch = parsed.street.match(/^(.*?)\s+(?:entre\s+(\d+\s+y\s+\d+|[^\n,]+)|x\s+(\d+\s+y\s+\d+))(.*)$/i)
-      if (crossMatch) {
-        parsed.address_reference = (crossMatch[2] ? `Entre ${crossMatch[2]}` : `Entre ${crossMatch[3]}`) + (crossMatch[4] || '')
-        parsed.address_reference = parsed.address_reference.trim()
-      }
-    }
-  }
-
-  // 2B. Fallback para nombre del cliente si no tuvo etiqueta explícita
-  if (!parsed.customer_name) {
-    for (let i = 0; i < Math.min(rawLines.length, 5); i++) {
-      if (consumedIndices.has(i)) continue
-      const line = rawLines[i].trim()
-      const words = line.split(/\s+/)
-      const isNameLike =
-        words.length >= 2 &&
-        words.length <= 4 &&
-        !/\d/.test(line) &&
-        !/\b(?:ticket|folio|orden|pedido|fecha|hora|calle|av|col|total|pago|sucursal|tacos?|pizza|burger|refresco)\b/i.test(line) &&
-        (!currentRestaurantName || !line.toLowerCase().includes(currentRestaurantName.toLowerCase()))
-
-      if (isNameLike) {
-        parsed.customer_name = line
-        consumedIndices.add(i)
-        break
-      }
-    }
-  }
-
-  // 4. Importe a cobrar (Total del ticket)
-  const totalRegex = /(?:total a pagar|total|gran total|importe total|importe|a pagar|monto a cobrar|cobrar|saldo)[\s:#$]*(\d{1,5}(?:[.,]\d{1,2})?)/i
-  for (let i = 0; i < rawLines.length; i++) {
+  for (let i = rawLines.length - 1; i >= 0; i--) {
     const line = rawLines[i]
-    if (/subtotal/i.test(line) && !/total a pagar|gran total/i.test(line)) continue
-    const match = line.match(totalRegex)
-    if (match) {
-      const num = parseFloat(match[1].replace(',', '.'))
-      if (!isNaN(num) && num > 0) {
-        parsed.amount_to_collect = num
+    if (excludedTotalLineRegex.test(line) && !/\b(?:total\s+a\s+pagar|gran\s+total)\b/i.test(line)) continue
+
+    const m = line.match(totalLabelRegex)
+    if (m) {
+      let amountVal = m[1] ? parseMoneyAmount(m[1]) : null
+      // Si el monto estaba al final de la línea o en la línea inmediatamente siguiente
+      if (!amountVal) {
+        const endNumMatch = normalizeOcrDigits(line).match(/\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)\s*$/)
+        if (endNumMatch) {
+          amountVal = parseMoneyAmount(endNumMatch[1])
+        } else if (i + 1 < rawLines.length) {
+          const nextNumMatch = normalizeOcrDigits(rawLines[i + 1]).match(/^\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)\s*$/)
+          if (nextNumMatch) {
+            amountVal = parseMoneyAmount(nextNumMatch[1])
+            if (amountVal) consumedIndices.add(i + 1)
+          }
+        }
+      }
+
+      if (amountVal && amountVal >= 15 && amountVal <= 25000) {
+        parsed.amount_to_collect = amountVal
         consumedIndices.add(i)
         break
       }
     }
   }
 
-  // 5. Forma de pago
-  const fullText = rawText.toLowerCase()
-  if (/\b(transferencia|spei|transfer|dep[oó]sito)\b/i.test(fullText)) {
+  // 5. Método de pago y Cambio ("Paga con", "Su pago", "Cambio")
+  const fullText = rawLines.join('\n').toLowerCase()
+  if (/\b(?:transferencia|spei|transfer|dep[oó]sito)\b/i.test(fullText)) {
     parsed.payment_method = 'Transferencia'
-  } else if (/\b(tarjeta|terminal|d[eé]bito|cr[eé]dito|visa|mastercard|amex|terminal bancaria)\b/i.test(fullText)) {
+  } else if (/\b(?:pagado\s+con\s+tarjeta|tarjeta|terminal|d[eé]bito|cr[eé]dito|visa|mastercard|amex|ya\s+pagado)\b/i.test(fullText)) {
     parsed.payment_method = 'Tarjeta / pedido pagado'
-  } else if (/\b(contra\s*entrega|contraentrega|cobro al entregar)\b/i.test(fullText)) {
+  } else if (/\b(?:contra\s*entrega|contraentrega|cobro\s+al\s+entregar)\b/i.test(fullText)) {
     parsed.payment_method = 'Pago contra entrega'
-  } else if (/\b(efectivo|cash|paga con|su pago|billete|cambio|recibido)\b/i.test(fullText)) {
+  } else if (/\b(?:efectivo|cash|paga\s+con|su\s+pago|billete|cambio|recibido)\b/i.test(fullText) || parsed.amount_to_collect) {
     parsed.payment_method = 'Efectivo'
   }
 
-  // 6. Cambio y Paga con
-  const payWithRegex = /(?:paga con(?: billete de)?|su pago|efectivo recibido|recibido|paga)[\s:#$]*(\d{2,5})/i
-  const changeRegex = /(?:cambio|su cambio)[\s:#$]*(\d{1,5}(?:[.,]\d{1,2})?)/i
+  const payWithRegex = /\b(?:paga\s+con(?:\s+billete\s+de)?|su\s+pago|efectivo\s+recibido|recibido|paga\s+\$)\b[\s:#$.-]*([0-9OolI.,]+)/i
+  const changeRegex = /\b(?:su\s+cambio|cambio|llevar\s+cambio(?:\s+de)?)\b[\s:#$.-]*([0-9OolI.,]+)/i
 
   let matchedBill = null
   let matchedChange = null
@@ -556,17 +881,26 @@ function parseTicketText(rawText, currentRestaurantName = '') {
     const line = rawLines[i]
     const payMatch = line.match(payWithRegex)
     if (payMatch) {
-      matchedBill = parseInt(payMatch[1], 10)
-      consumedIndices.add(i)
+      const val = parseMoneyAmount(payMatch[1])
+      if (val && val >= 20) {
+        matchedBill = Math.round(val)
+        consumedIndices.add(i)
+      }
     }
     const chMatch = line.match(changeRegex)
     if (chMatch) {
-      matchedChange = parseFloat(chMatch[1].replace(',', '.'))
-      consumedIndices.add(i)
+      const val = parseMoneyAmount(chMatch[1])
+      if (val !== null && val >= 0) {
+        matchedChange = val
+        consumedIndices.add(i)
+      }
     }
   }
 
-  if (matchedBill || matchedChange) {
+  if (
+    (matchedBill && (!parsed.amount_to_collect || matchedBill > parsed.amount_to_collect)) ||
+    (matchedChange !== null && matchedChange > 0)
+  ) {
     parsed.needs_change = true
     const bill =
       matchedBill ||
@@ -581,67 +915,190 @@ function parseTicketText(rawText, currentRestaurantName = '') {
     }
   }
 
-  // 7. Comentarios o notas para el repartidor
-  const commentRegex = /(?:notas?|comentarios?|observaci[oó]n(?:es)?|obs\.?|instrucciones?|indicaciones?)[\s:#.-]+(.+)/i
+  // 6. Comentarios o notas para el repartidor
+  const commentRegex = /^(?:notas?|comentarios?|observaci[oó]n(?:es)?|obs\.?|instrucciones?|indicaciones?)\b[\s:#.-]*(.*)$/i
   for (let i = 0; i < rawLines.length; i++) {
     if (consumedIndices.has(i)) continue
     const line = rawLines[i]
     const match = line.match(commentRegex)
     if (match) {
-      parsed.comments = match[1].trim()
-      consumedIndices.add(i)
-      break
+      let noteVal = (match[1] || '').trim()
+      if (noteVal.length < 2 && i + 1 < rawLines.length && !consumedIndices.has(i + 1)) {
+        noteVal = rawLines[i + 1].trim()
+        consumedIndices.add(i + 1)
+      }
+      if (noteVal.length >= 2) {
+        parsed.comments = noteVal
+        consumedIndices.add(i)
+        break
+      }
     }
   }
 
-  // 8. Filtro para descartar encabezados, subtotales o líneas de sistema en la descripción
-  const isIgnoredLine = (line) => {
+  // 7. Extraer productos / platillos (Descripción del pedido) y sumar respaldo si no hubo línea de TOTAL
+  const isSystemOrMetaLine = (line, idx) => {
+    if (headerIndices.has(idx)) return true
     const l = line.toLowerCase()
-    if (/\b(?:ticket\s*#?|folio\s*#?|orden\s*#|pedido\s*#|nro\.\s*orden|sucursal|rfc|cajero|mesa\s*#?|terminal\s*#?|turno|hora|fecha|pos)\b/i.test(l)) return true
-    if (currentRestaurantName && l.includes(currentRestaurantName.toLowerCase())) return true
-    if (/\b(?:subtotal|iva|tax|propina|descuento|total a pagar|total)\b/i.test(l)) return true
-    if (/\b(?:efectivo|cambio|tarjeta|transferencia|paga con|su pago|recibido|visa|mastercard|contra\s*entrega|cobro)\b/i.test(l)) return true
-    if (/\b(?:gracias por su|vuelva pronto|facturaci[oó]n|factura|software|sistema|atendido por|tel[eé]fono|tel\.|cel\.|cliente|domicilio|direcci[oó]n)\b/i.test(l)) return true
-    if (/^[-=*_.~#\s]+$/.test(line)) return true
+    if (/\b(?:ticket|folio|orden\s*#?|pedido\s*#?|comanda|sucursal|rfc|r[eé]gimen|cajero|mesero|mesa|terminal|turno|fecha|hora|pos|venta|cliente|domicilio|direcci[oó]n|colonia|tel[eé]fono|celular|whatsapp)\b/i.test(l)) return true
+    if (/\b(?:cant(?:idad)?\s+descripci[oó]n|art[ií]culo\s+precio|concepto\s+importe|descripci[oó]n\s+total)\b/i.test(l)) return true
+    if (/\b(?:subtotal|sub-total|iva|impuesto|propina|descuento|total\s+a\s+pagar|gran\s+total|total|env[ií]o|servicio\s+domicilio)\b/i.test(l)) return true
+    if (/\b(?:efectivo|cambio|tarjeta|transferencia|paga\s+con|su\s+pago|recibido|visa|mastercard|contra\s*entrega|cobro)\b/i.test(l)) return true
+    if (/\b(?:gracias\s+por|vuelva\s+pronto|facturaci[oó]n|factura|este\s+no\s+es\s+un\s+comprobante|propina\s+no\s+incluida)\b/i.test(l)) return true
     if (/^\$?\s*\d+(?:[.,]\d{1,2})?\s*$/.test(line)) return true
+    if (/^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}/.test(line)) return true
     return false
   }
 
-  // 9. Extraer productos / platillos (Descripción del pedido)
   const productLines = []
+  let sumProductPrices = 0
+
   for (let i = 0; i < rawLines.length; i++) {
     if (consumedIndices.has(i)) continue
     const line = rawLines[i]
-    if (isIgnoredLine(line)) continue
+    if (isSystemOrMetaLine(line, i)) continue
 
+    // Detectar si tiene precio al final de la línea (ej. "2 Pizza Grande $398.00")
+    const priceAtEndMatch = normalizeOcrDigits(line).match(/^(.*?)\s+\$?\s*(\d{2,4}(?:[.,]\d{2}))\s*$/)
     let cleanedProduct = line
-      .replace(/[\s.$]+(?:\d{1,4}(?:[.,]\d{2})?)\s*$/, '')
-      .replace(/[.]+$/, '')
-      .trim()
+    if (priceAtEndMatch && priceAtEndMatch[1].trim().length >= 3) {
+      cleanedProduct = priceAtEndMatch[1].trim()
+      const itemPrice = parseMoneyAmount(priceAtEndMatch[2])
+      if (itemPrice && itemPrice < 10000) {
+        sumProductPrices += itemPrice
+      }
+    } else {
+      cleanedProduct = line
+        .replace(/[\s.$]+(?:\d{1,4}(?:[.,]\d{2})?)\s*$/, '')
+        .replace(/[.]+$/, '')
+        .trim()
+    }
 
-    if (cleanedProduct.length >= 3) {
+    // Filtrar líneas basura de OCR (menos de 3 letras reales)
+    const letterCount = (cleanedProduct.match(/[a-záéíóúñ]/gi) || []).length
+    if (cleanedProduct.length >= 3 && letterCount >= 3) {
       productLines.push(cleanedProduct)
     }
   }
 
   parsed.description = productLines.join('\n')
 
-  // 10. Nivel de cuidado del pedido automático según platillos detectados
+  if (!parsed.amount_to_collect && sumProductPrices >= 20) {
+    parsed.amount_to_collect = Math.round(sumProductPrices * 100) / 100
+  }
+
+  // 8. Nivel de cuidado del pedido automático según platillos detectados
   const combinedDesc = (parsed.description + ' ' + (parsed.comments || '')).toLowerCase()
-  if (/\bpizza\b/i.test(combinedDesc)) {
+  if (/\bpizzas?\b/i.test(combinedDesc)) {
     parsed.care_instructions.push('Mantener horizontal')
   }
-  if (/\b(?:sopa|caldo|bebida|refresco|coca|pepsi|soda|jugo|caf[eé]|agua|malteada|frapp[eé]|vaso|cerveza)\b/i.test(combinedDesc)) {
+  if (/\b(?:sopa|caldo|consom[eé]|ramen|pozole|birria|bebida|refresco|coca|pepsi|soda|jugo|caf[eé]|agua|malteada|frapp[eé]|vaso|cerveza|licuado)\b/i.test(combinedDesc)) {
     parsed.care_instructions.push('Puede derramarse')
   }
-  if (/\b(?:caliente|pozole|birria|hamburguesa|burger|tacos?|comida|pizza|alitas|boneless|pollo)\b/i.test(combinedDesc)) {
+  if (/\b(?:caliente|pozole|birria|hamburguesa|burger|tacos?|comida|pizzas?|alitas|boneless|pollo|enchiladas|chilaquiles|burritos?|quesadillas?)\b/i.test(combinedDesc)) {
     parsed.care_instructions.push('Mantener caliente')
   }
-  if (/\b(?:fr[aá]gil|delicado|pastel|pay|postre|flan|brownie|huevo)\b/i.test(combinedDesc)) {
+  if (/\b(?:fr[aá]gil|delicado|pastel|pay|postre|flan|brownie|huevo|crepa|waffle)\b/i.test(combinedDesc)) {
     parsed.care_instructions.push('Frágil o delicado')
   }
 
   return parsed
+}
+
+// Cuenta cuántos campos clave logró extraer una pasada de OCR para elegir o combinar la mejor
+function scoreParsedTicket(p) {
+  let score = 0
+  if (p.customer_phone) score += 3
+  if (p.street) score += 3
+  if (p.neighborhood) score += 3
+  if (p.amount_to_collect !== null) score += 3
+  if (p.customer_name) score += 2
+  if (p.address_reference) score += 1
+  if (p.payment_method) score += 1
+  if (p.description) score += 1
+  return score
+}
+
+// Aplica el objeto parsed al formulario y devuelve la lista de campos rellenados
+async function applyParsedTicketToForm(parsed) {
+  const filled = []
+
+  if (parsed.customer_name) {
+    form.customer_name = parsed.customer_name
+    filled.push('Cliente')
+  }
+  if (parsed.customer_phone) {
+    form.customer_phone = parsed.customer_phone
+    filled.push('Teléfono')
+  }
+  if (parsed.street) {
+    form.street = parsed.street
+    filled.push('Calle')
+  }
+  if (parsed.neighborhood) {
+    form.neighborhood = parsed.neighborhood
+    filled.push('Colonia')
+  }
+  if (parsed.address_reference) {
+    form.address_reference = parsed.address_reference
+    filled.push('Referencias')
+  }
+  if (parsed.map_url) {
+    form.map_url = parsed.map_url
+    filled.push('Mapa URL')
+  }
+  if (parsed.amount_to_collect !== null) {
+    form.amount_to_collect = parsed.amount_to_collect
+    filled.push(`Total ($${Number(parsed.amount_to_collect).toFixed(2)})`)
+  }
+  if (parsed.payment_method) {
+    form.payment_method = parsed.payment_method
+    filled.push('Método de pago')
+  }
+  if (parsed.needs_change) {
+    form.needs_change = true
+    form.change_option = parsed.change_option
+    form.change_other = parsed.change_other
+    filled.push('Cambio')
+  }
+  if (parsed.description) {
+    form.description = parsed.description
+    filled.push('Productos')
+  }
+  if (parsed.comments) {
+    form.comments = parsed.comments
+    filled.push('Comentarios')
+  }
+  if (parsed.care_instructions.length) {
+    parsed.care_instructions.forEach((item) => {
+      if (!form.care_instructions.includes(item)) {
+        form.care_instructions.push(item)
+      }
+    })
+  }
+
+  ocrDetectedFields.value = filled
+
+  // Si el restaurante tiene ubicación registrada, calcular distancia automáticamente con los datos del ticket
+  if (hasRegisteredLocation.value && (form.street || form.neighborhood || form.map_url)) {
+    await autoCalculateRouteDistance(false)
+  }
+
+  return filled
+}
+
+async function reparseManualOcrText() {
+  if (!ocrRawText.value.trim()) {
+    showToast('Pega o escribe primero el texto del ticket o pedido.', 'info')
+    return
+  }
+  const parsed = parseTicketText(ocrRawText.value, restaurant.value?.name || '')
+  const filled = await applyParsedTicketToForm(parsed)
+  if (filled.length) {
+    ocrStatus.value = `✓ Se actualizaron ${filled.length} campos desde el texto: ${filled.join(', ')}.`
+    showToast(`¡${filled.length} campos distribuidos en el formulario!`, 'success')
+  } else {
+    showToast('No se identificaron campos etiquetados en el texto.', 'info')
+  }
 }
 
 async function handleTicketUpload(event) {
@@ -650,7 +1107,8 @@ async function handleTicketUpload(event) {
 
   imagePreview.value = URL.createObjectURL(file)
   ocrLoading.value = true
-  ocrStatus.value = 'Foto cargada. Preparando motor de reconocimiento OCR…'
+  ocrDetectedFields.value = []
+  ocrStatus.value = 'Mejorando nitidez y contraste de la imagen del ticket…'
 
   try {
     if (!window.Tesseract) {
@@ -664,65 +1122,82 @@ async function handleTicketUpload(event) {
       })
     }
 
-    ocrStatus.value = 'Leyendo ticket. Analizando texto…'
-    const resultOcr = await window.Tesseract.recognize(file, 'spa+eng', {
+    const { adaptiveCanvas, grayCanvas } = await preprocessImageForOcr(file)
+
+    ocrStatus.value = 'Analizando estructura y líneas del ticket (Paso 1)…'
+    const pass1 = await window.Tesseract.recognize(adaptiveCanvas, 'spa+eng', {
+      tessedit_pageseg_mode: '6',
+      preserve_interword_spaces: '1',
       logger: (m) => {
         if (m.status === 'recognizing text') {
-          ocrStatus.value = `Reconociendo texto: ${Math.round((m.progress || 0) * 100)}%`
+          ocrStatus.value = `Leyendo ticket (alta definición): ${Math.round((m.progress || 0) * 100)}%`
         }
       },
     })
 
-    const text = resultOcr?.data?.text || ''
-    const parsed = parseTicketText(text, restaurant.value?.name || '')
+    const text1 = pass1?.data?.text || ''
+    const parsed1 = parseTicketText(text1, restaurant.value?.name || '')
+    let bestParsed = parsed1
+    let bestText = text1
 
-    // Repartir ordenadamente cada dato en su campo correspondiente del formulario
-    if (parsed.customer_name) {
-      form.customer_name = parsed.customer_name
-    }
-    if (parsed.customer_phone) {
-      form.customer_phone = parsed.customer_phone
-    }
-    if (parsed.street) {
-      form.street = parsed.street
-    }
-    if (parsed.neighborhood) {
-      form.neighborhood = parsed.neighborhood
-    }
-    if (parsed.address_reference) {
-      form.address_reference = parsed.address_reference
-    }
-    if (parsed.amount_to_collect !== null) {
-      form.amount_to_collect = parsed.amount_to_collect
-    }
-    if (parsed.payment_method) {
-      form.payment_method = parsed.payment_method
-    }
-    if (parsed.needs_change) {
-      form.needs_change = true
-      form.change_option = parsed.change_option
-      form.change_other = parsed.change_other
-    }
-    if (parsed.description) {
-      form.description = parsed.description
-    }
-    if (parsed.comments) {
-      form.comments = parsed.comments
-    }
-    if (parsed.care_instructions.length) {
-      parsed.care_instructions.forEach((item) => {
-        if (!form.care_instructions.includes(item)) {
-          form.care_instructions.push(item)
-        }
+    // Si en la primera pasada faltaron datos clave (ej. teléfono, calle o monto), ejecutar segunda pasada con escala de grises suave
+    if (scoreParsedTicket(parsed1) < 9) {
+      ocrStatus.value = 'Refinando lectura en zonas con sombra (Paso 2)…'
+      const pass2 = await window.Tesseract.recognize(grayCanvas, 'spa+eng', {
+        tessedit_pageseg_mode: '4',
+        preserve_interword_spaces: '1',
       })
+      const text2 = pass2?.data?.text || ''
+      const parsed2 = parseTicketText(text2, restaurant.value?.name || '')
+
+      if (scoreParsedTicket(parsed2) > scoreParsedTicket(parsed1)) {
+        bestParsed = {
+          customer_name: parsed2.customer_name || parsed1.customer_name,
+          customer_phone: parsed2.customer_phone || parsed1.customer_phone,
+          street: parsed2.street || parsed1.street,
+          neighborhood: parsed2.neighborhood || parsed1.neighborhood,
+          address_reference: parsed2.address_reference || parsed1.address_reference,
+          map_url: parsed2.map_url || parsed1.map_url,
+          amount_to_collect: parsed2.amount_to_collect ?? parsed1.amount_to_collect,
+          payment_method: parsed2.payment_method || parsed1.payment_method,
+          needs_change: parsed2.needs_change || parsed1.needs_change,
+          change_option: parsed2.change_option || parsed1.change_option,
+          change_other: parsed2.change_other || parsed1.change_other,
+          description: parsed2.description.length >= parsed1.description.length ? parsed2.description : parsed1.description,
+          comments: parsed2.comments || parsed1.comments,
+          care_instructions: Array.from(new Set([...parsed1.care_instructions, ...parsed2.care_instructions])),
+        }
+        bestText = text2
+      } else {
+        bestParsed = {
+          customer_name: parsed1.customer_name || parsed2.customer_name,
+          customer_phone: parsed1.customer_phone || parsed2.customer_phone,
+          street: parsed1.street || parsed2.street,
+          neighborhood: parsed1.neighborhood || parsed2.neighborhood,
+          address_reference: parsed1.address_reference || parsed2.address_reference,
+          map_url: parsed1.map_url || parsed2.map_url,
+          amount_to_collect: parsed1.amount_to_collect ?? parsed2.amount_to_collect,
+          payment_method: parsed1.payment_method || parsed2.payment_method,
+          needs_change: parsed1.needs_change || parsed2.needs_change,
+          change_option: parsed1.change_option || parsed2.change_option,
+          change_other: parsed1.change_other || parsed2.change_other,
+          description: parsed1.description || parsed2.description,
+          comments: parsed1.comments || parsed2.comments,
+          care_instructions: Array.from(new Set([...parsed1.care_instructions, ...parsed2.care_instructions])),
+        }
+      }
     }
 
-    ocrStatus.value = '✓ Ticket leído con éxito. Cada dato fue colocado en su campo respectivo del formulario.'
-    showToast('¡Ticket procesado! Datos distribuidos en el formulario.', 'success')
+    ocrRawText.value = bestText.trim()
+    const filled = await applyParsedTicketToForm(bestParsed)
 
-    // Si el restaurante tiene ubicación registrada, calcular distancia automáticamente con los datos del ticket
-    if (hasRegisteredLocation.value && (form.street || form.neighborhood)) {
-      await autoCalculateRouteDistance(false)
+    if (filled.length > 0) {
+      ocrStatus.value = `✓ Lectura completada (${filled.length} campos detectados: ${filled.join(', ')}). Verifica los datos antes de enviar.`
+      showToast(`¡Ticket leído! Se completaron ${filled.length} campos.`, 'success')
+    } else {
+      ocrStatus.value = 'Se leyó la imagen pero no se identificaron etiquetas claras. Puedes revisar el texto detectado o llenar los campos.'
+      showOcrTextEditor.value = true
+      showToast('Revisa el texto detectado o ingresa los datos.', 'info')
     }
   } catch (err) {
     ocrStatus.value = `No se pudo completar el OCR automático: ${err.message}. Puedes ingresar los datos manualmente.`
@@ -734,8 +1209,12 @@ async function handleTicketUpload(event) {
 
 function clearTicketPhoto() {
   if (ticketFileInput.value) ticketFileInput.value.value = ''
+  if (ticketGalleryInput.value) ticketGalleryInput.value.value = ''
   imagePreview.value = ''
-  ocrStatus.value = 'La lectura automática procesa el ticket en tu navegador para agilizar la captura.'
+  ocrRawText.value = ''
+  ocrDetectedFields.value = []
+  showOcrTextEditor.value = false
+  ocrStatus.value = 'Toma una foto nítida del ticket o pega el texto del pedido para distribuir los datos automáticamente.'
 }
 
 // Solicitud rápida de repartidores
@@ -1185,8 +1664,8 @@ function resetOrderForm() {
           <div class="scan-header">
             <div class="scan-icon-badge">📷</div>
             <div class="scan-text">
-              <h4>Tomar foto o subir el ticket del local</h4>
-              <p>Usa la cámara del celular o elige una foto del ticket. El sistema intentará reconocer el texto y completar los campos. Revisa y corrige los datos antes de enviar.</p>
+              <h4>Auto-rellenar desde Ticket o Mensaje de Pedido</h4>
+              <p>Toma una foto clara del ticket térmico, sube una captura de pantalla o pega el texto del pedido por WhatsApp para llenar los campos automáticamente.</p>
             </div>
           </div>
 
@@ -1200,22 +1679,75 @@ function resetOrderForm() {
                 :disabled="ocrLoading"
                 @change="handleTicketUpload"
               >
-              📸 {{ ocrLoading ? 'Procesando imagen...' : 'Tomar foto / elegir imagen' }}
+              📸 {{ ocrLoading ? 'Escaneando...' : 'Cámara (Ticket)' }}
+            </label>
+
+            <label class="btn-scan btn-scan-gallery" :class="{ 'disabled': ocrLoading }">
+              <input
+                ref="ticketGalleryInput"
+                type="file"
+                accept="image/*"
+                :disabled="ocrLoading"
+                @change="handleTicketUpload"
+              >
+              🖼️ Subir imagen / captura
             </label>
 
             <button
-              v-if="imagePreview"
+              type="button"
+              class="btn-scan btn-scan-text"
+              @click="showOcrTextEditor = !showOcrTextEditor"
+            >
+              📝 {{ showOcrTextEditor ? 'Ocultar texto' : 'Pegar / revisar texto' }}
+            </button>
+
+            <button
+              v-if="imagePreview || ocrRawText"
               type="button"
               class="btn-scan btn-scan-clear"
               @click="clearTicketPhoto"
             >
-              Quitar foto
+              🗑️ Limpiar
             </button>
           </div>
 
           <!-- Vista previa de foto -->
           <div v-if="imagePreview" class="preview-container">
             <img :src="imagePreview" alt="Vista previa del ticket" class="ticket-preview-img">
+          </div>
+
+          <!-- Chips de campos detectados -->
+          <div v-if="ocrDetectedFields.length" class="ocr-detected-chips">
+            <span class="ocr-chips-label">Campos detectados:</span>
+            <span
+              v-for="field in ocrDetectedFields"
+              :key="field"
+              class="ocr-chip-badge"
+            >
+              ✓ {{ field }}
+            </span>
+          </div>
+
+          <!-- Editor / Pegado rápido de texto del ticket o WhatsApp -->
+          <div v-if="showOcrTextEditor" class="ocr-text-editor">
+            <label class="ocr-editor-label">
+              Texto leído del ticket o pegado de WhatsApp (puedes corregirlo y volver a aplicar):
+            </label>
+            <textarea
+              v-model="ocrRawText"
+              rows="5"
+              class="ocr-editor-textarea"
+              placeholder="Ejemplo:&#10;Cliente: Juan Pérez&#10;Tel: 415 123 4567&#10;Calle: Hidalgo #45&#10;Colonia: Centro&#10;Total: $285.00&#10;Pago: Efectivo (Paga con $500)"
+            />
+            <div class="ocr-editor-actions">
+              <button
+                type="button"
+                class="btn-scan btn-scan-apply-text"
+                @click="reparseManualOcrText"
+              >
+                ✨ Rellenar formulario con este texto
+              </button>
+            </div>
           </div>
 
           <!-- Estado del OCR -->
@@ -2052,8 +2584,34 @@ function resetOrderForm() {
   cursor: wait;
 }
 
-.btn-scan-upload input[type="file"] {
+.btn-scan-upload input[type="file"],
+.btn-scan-gallery input[type="file"] {
   display: none;
+}
+
+.btn-scan-gallery {
+  background: #1e293b;
+  color: #ffffff;
+}
+
+.btn-scan-gallery:hover:not(.disabled) {
+  background: #0f172a;
+}
+
+.btn-scan-gallery.disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.btn-scan-text {
+  background: #ffffff;
+  color: #334155;
+  border: 1px solid #cbd5e1;
+}
+
+.btn-scan-text:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
 }
 
 .btn-scan-clear {
@@ -2064,6 +2622,87 @@ function resetOrderForm() {
 
 .btn-scan-clear:hover {
   background: #fff0f0;
+}
+
+.ocr-detected-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 10px;
+}
+
+.ocr-chips-label {
+  font-size: 12px;
+  font-weight: 800;
+  color: #166534;
+  margin-right: 4px;
+}
+
+.ocr-chip-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #15803d;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.ocr-text-editor {
+  margin-top: 12px;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ocr-editor-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.ocr-editor-textarea {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #1e293b;
+  background: #f8fafc;
+  resize: vertical;
+}
+
+.ocr-editor-textarea:focus {
+  outline: none;
+  border-color: #d71920;
+  background: #ffffff;
+}
+
+.ocr-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.btn-scan-apply-text {
+  background: #16a34a;
+  color: #ffffff;
+  padding: 9px 14px;
+  font-size: 13px;
+}
+
+.btn-scan-apply-text:hover {
+  background: #15803d;
 }
 
 .preview-container {
