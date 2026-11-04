@@ -82,6 +82,14 @@ const whatsappUrl = computed(() => {
   return `https://api.whatsapp.com/send?phone=524151805038&text=${encodeURIComponent(message)}`
 })
 
+const assistanceWhatsappUrl = computed(() => {
+  const restaurantName = restaurant.value?.name || 'Local'
+  const code = restaurant.value?.code ? ` (#${restaurant.value.code})` : ''
+  const folioInfo = result.value?.folio ? ` con el pedido *${result.value.folio}*` : ''
+  const message = `Hola soporte RODO, solicito asistencia desde *${restaurantName}*${code}${folioInfo} por un detalle con el envío o repartidor.`
+  return `https://api.whatsapp.com/send?phone=524151019920&text=${encodeURIComponent(message)}`
+})
+
 async function copyTicketLink() {
   if (!ticketUrl.value) return
   try {
@@ -1089,6 +1097,15 @@ function resetOrderForm() {
             📲 Compartir por WhatsApp
           </a>
 
+          <a
+            :href="assistanceWhatsappUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="action-btn btn-assistance-inline"
+          >
+            🎧 Asistencia
+          </a>
+
           <button
             type="button"
             class="action-btn btn-reset"
@@ -1134,12 +1151,27 @@ function resetOrderForm() {
 
         <!-- Sucursal activa identificada -->
         <div class="selected-local-banner">
-          <div class="local-banner-content">
-            <span class="banner-badge">LOCAL AUTORIZADO</span>
-            <strong>{{ restaurant.name }}</strong>
-            <span class="badge-code">Código #{{ restaurant.code }}</span>
+          <div class="local-banner-row">
+            <div>
+              <div class="local-banner-content">
+                <span class="banner-badge">LOCAL AUTORIZADO</span>
+                <strong>{{ restaurant.name }}</strong>
+                <span class="badge-code">Código #{{ restaurant.code }}</span>
+              </div>
+              <p class="help-micro">Tu sucursal está autenticada mediante tu sesión activa en RODO.</p>
+            </div>
+
+            <a
+              :href="assistanceWhatsappUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="btn-assistance-top"
+              title="Contactar a Asistencia RODO por WhatsApp (415 101 9920)"
+            >
+              <span>🎧</span>
+              <span>Asistencia</span>
+            </a>
           </div>
-          <p class="help-micro">Tu sucursal está autenticada mediante tu sesión activa en RODO.</p>
         </div>
 
         <!-- Encabezado de sección de entrega -->
@@ -1558,6 +1590,23 @@ function resetOrderForm() {
           {{ loading ? 'Solicitando entrega...' : 'Solicitar entrega' }}
         </button>
 
+        <!-- Botón de Asistencia directa por WhatsApp (415 101 9920) -->
+        <div class="assistance-box">
+          <div class="assistance-info">
+            <strong>¿Algún inconveniente con el envío o con el repartidor?</strong>
+            <span>Comunícate de inmediato con soporte para resolver cualquier detalle.</span>
+          </div>
+          <a
+            :href="assistanceWhatsappUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn-assistance-form"
+          >
+            <span>🎧</span>
+            <span>Asistencia</span>
+          </a>
+        </div>
+
         <p class="footer-help">
           Los datos se registran directamente en el sistema central de RODO Moto Mandados para su coordinación inmediata.
         </p>
@@ -1595,7 +1644,7 @@ function resetOrderForm() {
           </div>
 
           <div v-if="quickResult.note" class="quick-note-preview">
-            <strong>Nota enviada al líder:</strong> “{{ quickResult.note }}”
+            <strong>Nota enviada:</strong> “{{ quickResult.note }}”
           </div>
 
           <!-- Botones de Acción para la Solicitud -->
@@ -1664,7 +1713,7 @@ function resetOrderForm() {
           </div>
 
           <div class="field-group" style="margin-top: 18px;">
-            <label for="quick_note">Nota o mensaje para el líder (opcional)</label>
+            <label for="quick_note">Nota o mensaje (opcional)</label>
             <input
               id="quick_note"
               v-model="quickNote"
@@ -1868,6 +1917,35 @@ function resetOrderForm() {
   border-radius: 12px;
   padding: 14px 16px;
   margin-bottom: 22px;
+}
+
+.local-banner-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.btn-assistance-top {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: #0f172a;
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 13.5px;
+  font-weight: 800;
+  padding: 9px 16px;
+  border-radius: 10px;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.16);
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-assistance-top:hover {
+  background: #1e293b;
+  transform: translateY(-1px);
 }
 
 .local-banner-content {
@@ -2501,6 +2579,65 @@ textarea {
   transform: none;
 }
 
+/* Caja y botón de Asistencia por WhatsApp (415 101 9920) */
+.assistance-box {
+  margin-top: 14px;
+  padding: 14px 18px;
+  background: #f8fafc;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.assistance-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.assistance-info strong {
+  font-size: 14px;
+  color: #0f172a;
+}
+
+.btn-assistance-form {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #16a34a;
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 800;
+  padding: 11px 20px;
+  border-radius: 10px;
+  box-shadow: 0 4px 12px rgba(22, 163, 74, 0.25);
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-assistance-form:hover {
+  background: #15803d;
+  transform: translateY(-1px);
+}
+
+.btn-assistance-inline {
+  background: #0f172a;
+  color: #ffffff;
+  text-decoration: none;
+}
+
+.btn-assistance-inline:hover {
+  background: #1e293b;
+}
+
 .footer-help {
   font-size: 12px;
   color: #94a3b8;
@@ -3010,6 +3147,16 @@ textarea {
   }
   .result-action-buttons {
     grid-template-columns: 1fr;
+  }
+  .btn-assistance-top,
+  .btn-assistance-form {
+    width: 100%;
+    justify-content: center;
+    box-sizing: border-box;
+  }
+  .assistance-box {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 </style>
