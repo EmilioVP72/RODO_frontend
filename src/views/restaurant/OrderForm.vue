@@ -1297,12 +1297,17 @@ function getQuickMatchesForRider(riderZeroIndex) {
   const tokens = cleanQuery.split(/\s+/).filter(Boolean)
   return normalizedSanMiguelZones
     .filter((entry) => tokens.every((tok) => entry.normalized.includes(tok)))
-    .slice(0, 6)
+    .slice(0, 15)
     .map((entry) => entry.label)
 }
 
 function selectZoneForRider(riderZeroIndex, zoneLabel) {
   selectedRiderZones.value[riderZeroIndex] = zoneLabel
+  riderZoneSearchQueries.value[riderZeroIndex] = ''
+}
+
+function clearSelectedZoneForRider(riderZeroIndex) {
+  selectedRiderZones.value[riderZeroIndex] = ''
   riderZoneSearchQueries.value[riderZeroIndex] = ''
 }
 
@@ -1936,7 +1941,7 @@ function resetOrderForm() {
             title="Volver al inicio de sesión principal"
             @click="goBackToLogin"
           >
-            ← Inicio
+            ← Salir
           </button>
           <div class="logo-box" :class="{ 'has-custom-logo': Boolean(appBranding.logo_image_url) }">
             <img
@@ -1949,23 +1954,29 @@ function resetOrderForm() {
           </div>
           <div class="brand-text">
             <h1>RODO Moto Mandados</h1>
-            <p>Portal privado para locales · Solicitud de repartidores</p>
+            <p v-if="restaurant">{{ restaurant.name }} · #{{ restaurant.code }}</p>
+            <p v-else>Portal de locales</p>
           </div>
         </div>
 
         <div class="header-right-actions">
-          <div v-if="restaurant" class="header-restaurant-pill">
-            <span class="online-indicator" />
-            <span class="restaurant-name">{{ restaurant.name }}</span>
-            <span class="restaurant-code">#{{ restaurant.code }}</span>
-          </div>
+          <a
+            :href="assistanceWhatsappUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn-assistance-header"
+            title="Contactar a Asistencia RODO por WhatsApp (415 101 9920)"
+          >
+            <span>🎧</span>
+            <span>Asistencia</span>
+          </a>
         </div>
       </div>
     </header>
 
     <main class="portal-main">
 
-      <!-- Barra de navegación entre Solicitar Entrega y Mis Pedidos de Hoy -->
+      <!-- Barra de navegación grande y clara entre Solicitar Entrega y Mis Pedidos de Hoy -->
       <div v-if="restaurant" class="portal-tabs-bar">
         <button
           type="button"
@@ -1973,7 +1984,7 @@ function resetOrderForm() {
           @click="switchPortalTab('form')"
         >
           <span>🛵</span>
-          <span>Solicitar Repartidor</span>
+          <span>Pedir Repartidor</span>
         </button>
 
         <button
@@ -1987,45 +1998,18 @@ function resetOrderForm() {
         </button>
       </div>
 
-      <!-- Título de sección con botón de retroceso rápido -->
-      <div class="intro-section">
-        <div class="intro-top-row">
-          <div>
-            <h2>
-              {{ activePortalTab === 'history' ? 'Mis Pedidos del Día' : 'Solicitar una entrega' }}
-            </h2>
-            <p v-if="activePortalTab === 'history'">
-              Historial individual de hoy exclusivo para <strong>{{ restaurant?.name }} (#{{ restaurant?.code }})</strong>. Se limpia automáticamente al terminar el día.
-            </p>
-            <p v-else>
-              Registra los datos del pedido en pocos pasos o toma una foto del ticket para intentar llenar los campos automáticamente.
-            </p>
-          </div>
-          <button
-            type="button"
-            class="btn-back-login"
-            @click="goBackToLogin"
-          >
-            <span>←</span>
-            <span>Volver al login</span>
-          </button>
-        </div>
-      </div>
-
       <!-- ===================================================== -->
       <!-- PESTAÑA 2: HISTORIAL INDIVIDUAL DE PEDIDOS DEL DÍA    -->
       <!-- ===================================================== -->
       <section v-if="restaurant && activePortalTab === 'history'" class="daily-history-section">
 
-        <!-- Banner informativo de privacidad y corte diario -->
+        <!-- Encabezado compacto del día -->
         <div class="daily-notice-banner">
           <div class="daily-notice-left">
             <span class="daily-notice-icon">📅</span>
             <div>
-              <strong>Jornada de hoy ({{ todayFormattedLabel }}) · {{ restaurant.name }} (#{{ restaurant.code }})</strong>
-              <p>
-                Aquí solo aparecen los pedidos registrados hoy por tu establecimiento. Al iniciar un nuevo día (00:00 hrs), esta vista comienza limpia automáticamente.
-              </p>
+              <strong>Pedidos de hoy ({{ todayFormattedLabel }})</strong>
+              <p>Exclusivo de {{ restaurant.name }} (#{{ restaurant.code }}). Se reinicia cada día a las 00:00 hrs.</p>
             </div>
           </div>
           <button
@@ -2034,7 +2018,7 @@ function resetOrderForm() {
             :disabled="dailyLoading"
             @click="fetchDailyOrders(false)"
           >
-            {{ dailyLoading ? '⏳ Actualizando...' : '🔄 Actualizar lista' }}
+            {{ dailyLoading ? '⏳ Actualizando...' : '🔄 Actualizar' }}
           </button>
         </div>
 
@@ -2343,112 +2327,69 @@ function resetOrderForm() {
         </router-link>
       </div>
 
-      <!-- Formulario principal de pedido -->
+      <!-- Formulario principal de pedido (Limpio, claro y accesible) -->
       <form v-if="restaurant && !result && activePortalTab === 'form'" class="card form-card" @submit.prevent="submitOrder">
 
-        <!-- Sucursal activa identificada -->
-        <div class="selected-local-banner">
-          <div class="local-banner-row">
-            <div>
-              <div class="local-banner-content">
-                <span class="banner-badge">LOCAL AUTORIZADO</span>
-                <strong>{{ restaurant.name }}</strong>
-                <span class="badge-code">Código #{{ restaurant.code }}</span>
+        <!-- Módulo compacto opcional de foto de ticket -->
+        <div class="scan-box">
+          <div class="scan-compact-bar">
+            <div class="scan-title-inline">
+              <span class="scan-icon-mini">📷</span>
+              <div>
+                <strong>Auto-llenar con foto de ticket</strong>
+                <span class="scan-optional-tag">Opcional</span>
               </div>
-              <p class="help-micro">Tu sucursal está autenticada mediante tu sesión activa en RODO.</p>
             </div>
 
-            <div class="local-banner-actions">
+            <div class="scan-actions">
+              <label class="btn-scan btn-scan-upload" :class="{ 'disabled': ocrLoading }">
+                <input
+                  ref="ticketFileInput"
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  :disabled="ocrLoading"
+                  @change="handleTicketUpload"
+                >
+                📸 {{ ocrLoading ? 'Leyendo...' : 'Tomar foto' }}
+              </label>
+
+              <label class="btn-scan btn-scan-gallery" :class="{ 'disabled': ocrLoading }">
+                <input
+                  ref="ticketGalleryInput"
+                  type="file"
+                  accept="image/*"
+                  :disabled="ocrLoading"
+                  @change="handleTicketUpload"
+                >
+                🖼️ Subir foto
+              </label>
+
               <button
                 type="button"
-                class="btn-back-banner"
-                title="Regresar al login principal / cambiar de cuenta"
-                @click="goBackToLogin"
+                class="btn-scan btn-scan-text"
+                @click="showOcrTextEditor = !showOcrTextEditor"
               >
-                <span>←</span>
-                <span>Cambiar cuenta</span>
+                📝 {{ showOcrTextEditor ? 'Cerrar texto' : 'Pegar texto' }}
               </button>
 
-              <a
-                :href="assistanceWhatsappUrl"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="btn-assistance-top"
-                title="Contactar a Asistencia RODO por WhatsApp (415 101 9920)"
+              <button
+                v-if="imagePreview || ocrRawText"
+                type="button"
+                class="btn-scan btn-scan-clear"
+                @click="clearTicketPhoto"
               >
-                <span>🎧</span>
-                <span>Asistencia</span>
-              </a>
-            </div>
-          </div>
-        </div>
-
-        <!-- Encabezado de sección de entrega -->
-        <div class="section-heading">
-          <h3>Datos de la entrega</h3>
-          <p class="sub">Registra los datos del pedido o toma una foto del ticket para intentar llenar los campos automáticamente.</p>
-        </div>
-
-        <!-- Módulo de Escaneo / Foto del Ticket -->
-        <div class="scan-box">
-          <div class="scan-header">
-            <div class="scan-icon-badge">📷</div>
-            <div class="scan-text">
-              <h4>Auto-rellenar desde Ticket o Mensaje de Pedido</h4>
-              <p>Toma una foto clara del ticket térmico, sube una captura de pantalla o pega el texto del pedido por WhatsApp para llenar los campos automáticamente.</p>
+                🗑️ Limpiar
+              </button>
             </div>
           </div>
 
-          <div class="scan-actions">
-            <label class="btn-scan btn-scan-upload" :class="{ 'disabled': ocrLoading }">
-              <input
-                ref="ticketFileInput"
-                type="file"
-                accept="image/*"
-                capture="environment"
-                :disabled="ocrLoading"
-                @change="handleTicketUpload"
-              >
-              📸 {{ ocrLoading ? 'Escaneando...' : 'Cámara (Ticket)' }}
-            </label>
-
-            <label class="btn-scan btn-scan-gallery" :class="{ 'disabled': ocrLoading }">
-              <input
-                ref="ticketGalleryInput"
-                type="file"
-                accept="image/*"
-                :disabled="ocrLoading"
-                @change="handleTicketUpload"
-              >
-              🖼️ Subir imagen / captura
-            </label>
-
-            <button
-              type="button"
-              class="btn-scan btn-scan-text"
-              @click="showOcrTextEditor = !showOcrTextEditor"
-            >
-              📝 {{ showOcrTextEditor ? 'Ocultar texto' : 'Pegar / revisar texto' }}
-            </button>
-
-            <button
-              v-if="imagePreview || ocrRawText"
-              type="button"
-              class="btn-scan btn-scan-clear"
-              @click="clearTicketPhoto"
-            >
-              🗑️ Limpiar
-            </button>
-          </div>
-
-          <!-- Vista previa de foto -->
           <div v-if="imagePreview" class="preview-container">
             <img :src="imagePreview" alt="Vista previa del ticket" class="ticket-preview-img">
           </div>
 
-          <!-- Chips de campos detectados -->
           <div v-if="ocrDetectedFields.length" class="ocr-detected-chips">
-            <span class="ocr-chips-label">Campos detectados:</span>
+            <span class="ocr-chips-label">Detectado:</span>
             <span
               v-for="field in ocrDetectedFields"
               :key="field"
@@ -2458,16 +2399,12 @@ function resetOrderForm() {
             </span>
           </div>
 
-          <!-- Editor / Pegado rápido de texto del ticket o WhatsApp -->
           <div v-if="showOcrTextEditor" class="ocr-text-editor">
-            <label class="ocr-editor-label">
-              Texto leído del ticket o pegado de WhatsApp (puedes corregirlo y volver a aplicar):
-            </label>
             <textarea
               v-model="ocrRawText"
-              rows="5"
+              rows="4"
               class="ocr-editor-textarea"
-              placeholder="Ejemplo:&#10;Cliente: Juan Pérez&#10;Tel: 415 123 4567&#10;Calle: Hidalgo #45&#10;Colonia: Centro&#10;Total: $285.00&#10;Pago: Efectivo (Paga con $500)"
+              placeholder="Pega aquí el mensaje de WhatsApp o texto del pedido..."
             />
             <div class="ocr-editor-actions">
               <button
@@ -2475,141 +2412,112 @@ function resetOrderForm() {
                 class="btn-scan btn-scan-apply-text"
                 @click="reparseManualOcrText"
               >
-                ✨ Rellenar formulario con este texto
+                ✨ Llenar campos con este texto
               </button>
             </div>
           </div>
 
-          <!-- Estado del OCR -->
-          <div class="ocr-status-box" :class="{ 'ocr-busy': ocrLoading }">
+          <div v-if="ocrLoading || imagePreview || ocrDetectedFields.length" class="ocr-status-box" :class="{ 'ocr-busy': ocrLoading }">
             <span v-if="ocrLoading" class="mini-spinner" />
             <span>{{ ocrStatus }}</span>
           </div>
         </div>
 
-        <!-- Grid de campos de entrega -->
-        <div class="fields-grid">
-
-          <!-- Nombre del cliente (opcional) -->
-          <div class="field-group">
-            <label for="customer_name">Nombre del cliente (opcional)</label>
-            <input
-              id="customer_name"
-              v-model="form.customer_name"
-              type="text"
-              maxlength="150"
-              placeholder="Nombre del cliente"
-            >
+        <!-- PASO 1: Datos del cliente y dirección -->
+        <div class="step-block">
+          <div class="step-header">
+            <span class="step-num">1</span>
+            <h3>¿A dónde llevamos el pedido?</h3>
           </div>
 
-          <!-- Teléfono del cliente (obligatorio) -->
-          <div class="field-group">
-            <label for="customer_phone">Teléfono del cliente *</label>
-            <input
-              id="customer_phone"
-              v-model="form.customer_phone"
-              type="tel"
-              maxlength="25"
-              required
-              placeholder="Número de contacto (10 dígitos)"
-            >
-          </div>
-
-          <!-- Calle y número (full width) -->
-          <div class="field-group full-width">
-            <label for="street">Calle y número *</label>
-            <input
-              id="street"
-              v-model="form.street"
-              type="text"
-              maxlength="255"
-              required
-              placeholder="Ej. Av. Juárez #123 entre 50 y 52"
-            >
-          </div>
-
-          <!-- Colonia -->
-          <div class="field-group">
-            <label for="neighborhood">Colonia *</label>
-            <input
-              id="neighborhood"
-              v-model="form.neighborhood"
-              type="text"
-              maxlength="150"
-              required
-              placeholder="Nombre de la colonia"
-            >
-          </div>
-
-          <!-- Referencias del domicilio -->
-          <div class="field-group">
-            <label for="address_reference">Referencias del domicilio</label>
-            <input
-              id="address_reference"
-              v-model="form.address_reference"
-              type="text"
-              placeholder="Entre calles, color de fachada o negocio cercano"
-            >
-          </div>
-
-          <!-- Ubicación exacta (Google Maps) -->
-          <div class="field-group full-width">
-            <label for="map_url">Ubicación exacta (opcional)</label>
-            <input
-              id="map_url"
-              v-model="form.map_url"
-              type="text"
-              placeholder="Pega enlace de Google Maps del cliente si lo tienes"
-            >
-          </div>
-
-          <!-- Distancia y cálculo de tarifa (full width) -->
-          <div class="field-group full-width distance-calc-card">
-            <div class="distance-card-header">
-              <span class="distance-icon">{{ hasFixedFee ? '📌' : hasRegisteredLocation ? '🛰️' : '🛵' }}</span>
-              <div>
-                <label for="distance_km" class="distance-title">
-                  <template v-if="hasFixedFee">
-                    Tarifa Fija Establecida para {{ restaurant.name }}
-                  </template>
-                  <template v-else-if="hasRegisteredLocation">
-                    Distancia y Tarifa Automática (Ubicación de Sucursal Activa)
-                  </template>
-                  <template v-else>
-                    Distancia por calles desde la sucursal al cliente (km) *
-                  </template>
-                </label>
-                <p class="distance-sub">
-                  <template v-if="hasFixedFee">
-                    Tu local tiene asignada una tarifa fija de entrega en el sistema. La distancia en kilómetros se calcula para colocarla en el ticket.
-                  </template>
-                  <template v-else-if="hasRegisteredLocation">
-                    Se calcula automáticamente usando la ubicación de tu local en la base de datos y la dirección del pedido.
-                  </template>
-                  <template v-else>
-                    Introduce los kilómetros de la ruta real para obtener la tarifa oficial al instante.
-                  </template>
-                </p>
-              </div>
+          <div class="fields-grid">
+            <div class="field-group">
+              <label for="customer_phone">📞 Teléfono del cliente <span class="req">*</span></label>
+              <input
+                id="customer_phone"
+                v-model="form.customer_phone"
+                type="tel"
+                maxlength="25"
+                required
+                placeholder="Ej. 415 123 4567"
+              >
             </div>
 
-            <!-- Estado del cálculo automático cuando el restaurante tiene ubicación en BD (con o sin tarifa fija) -->
+            <div class="field-group">
+              <label for="customer_name">👤 Nombre del cliente (opcional)</label>
+              <input
+                id="customer_name"
+                v-model="form.customer_name"
+                type="text"
+                maxlength="150"
+                placeholder="Ej. María López"
+              >
+            </div>
+
+            <div class="field-group">
+              <label for="street">🏠 Calle y número <span class="req">*</span></label>
+              <input
+                id="street"
+                v-model="form.street"
+                type="text"
+                maxlength="255"
+                required
+                placeholder="Ej. Calle Hidalgo #45"
+              >
+            </div>
+
+            <div class="field-group">
+              <label for="neighborhood">📍 Colonia o Fraccionamiento <span class="req">*</span></label>
+              <input
+                id="neighborhood"
+                v-model="form.neighborhood"
+                type="text"
+                maxlength="150"
+                required
+                placeholder="Ej. Centro, Aurora, Guadalupe..."
+              >
+            </div>
+
+            <div class="field-group">
+              <label for="address_reference">🧭 Referencias de la casa (opcional)</label>
+              <input
+                id="address_reference"
+                v-model="form.address_reference"
+                type="text"
+                placeholder="Color de fachada, portón o entre qué calles"
+              >
+            </div>
+
+            <div class="field-group">
+              <label for="map_url">🗺️ Enlace de Google Maps (opcional)</label>
+              <input
+                id="map_url"
+                v-model="form.map_url"
+                type="text"
+                placeholder="Pega el link de ubicación si el cliente lo envió"
+              >
+            </div>
+          </div>
+        </div>
+
+        <!-- PASO 2: Distancia y Tarifa de Envío -->
+        <div class="step-block">
+          <div class="step-header">
+            <span class="step-num">2</span>
+            <h3>Tarifa de envío</h3>
+          </div>
+
+          <div class="distance-calc-card">
             <div
-              v-if="hasRegisteredLocation"
+              v-if="hasRegisteredLocation && (autoDistanceLoading || autoDistanceStatus)"
               class="auto-distance-banner"
               :class="{ 'is-loading': autoDistanceLoading, 'is-ok': autoDistanceSuccess }"
             >
               <span v-if="autoDistanceLoading" class="mini-spinner" />
-              <span v-else>{{ autoDistanceSuccess ? '🔒' : '📍' }}</span>
-              <span>
-                {{
-                  autoDistanceStatus ||
-                  'Al ingresar la calle y colonia (o enlace de mapa) del cliente, calcularemos los kilómetros automáticamente.'
-                }}
-              </span>
+              <span v-else>{{ autoDistanceSuccess ? '✓' : '📍' }}</span>
+              <span>{{ autoDistanceStatus }}</span>
             </div>
 
-            <!-- Input de distancia (bloqueado automáticamente tras calcularse con la ubicación del local) -->
             <div class="distance-input-row">
               <div class="input-with-km">
                 <input
@@ -2623,8 +2531,7 @@ function resetOrderForm() {
                   :disabled="autoDistanceSuccess || autoDistanceLoading"
                   :readonly="autoDistanceSuccess || autoDistanceLoading"
                   :class="{ 'input-locked': autoDistanceSuccess }"
-                  :title="autoDistanceSuccess ? 'Distancia calculada automáticamente. No se puede modificar.' : ''"
-                  :placeholder="hasRegisteredLocation ? 'Se calcula automáticamente (Ej. 2.5)' : 'Ej. 2.5'"
+                  :placeholder="hasRegisteredLocation ? 'Distancia automática (km)' : 'Escribe los km (Ej. 2.5)'"
                 >
                 <span class="km-unit-badge" :class="{ 'is-locked': autoDistanceSuccess }">
                   {{ autoDistanceSuccess ? '🔒 km' : 'km' }}
@@ -2637,25 +2544,17 @@ function resetOrderForm() {
                 :disabled="autoDistanceLoading || autoDistanceSuccess"
                 @click="autoCalculateRouteDistance(true)"
               >
-                <span>
-                  {{
-                    autoDistanceLoading
-                      ? 'Calculando...'
-                      : autoDistanceSuccess
-                        ? hasFixedFee
-                          ? '🔒 Km calculados'
-                          : '🔒 Tarifa bloqueada'
-                        : hasRegisteredLocation
-                          ? '🛰️ Calcular con ubicación'
-                          : hasFixedFee
-                            ? 'Actualizar km'
-                            : 'Calcular tarifa'
-                  }}
-                </span>
+                {{
+                  autoDistanceLoading
+                    ? 'Calculando...'
+                    : autoDistanceSuccess
+                      ? '🔒 Calculado'
+                      : '🛰️ Calcular km'
+                }}
               </button>
             </div>
 
-            <!-- Resultado visual de la tarifa prominente -->
+            <!-- Resultado visual de la tarifa -->
             <div
               class="price-result-box"
               :class="{
@@ -2664,35 +2563,23 @@ function resetOrderForm() {
                 'price-empty': calculatedFee.status === 'empty'
               }"
             >
-              <!-- Caso 1: Tarifa Calculada OK (Fija o por Distancia) -->
               <div v-if="calculatedFee.status === 'ok'" class="price-box-content">
                 <div class="price-meta">
                   <div class="price-badge-header">
                     <span class="live-dot" />
-                    <span>
-                      {{ calculatedFee.isFixed ? 'TARIFA FIJA ESTABLECIDA EN SISTEMA' : 'TARIFA OFICIAL DE ENTREGA' }}
-                    </span>
+                    <span>{{ calculatedFee.isFixed ? 'TARIFA FIJA DE TU LOCAL' : 'TARIFA DE ENVÍO' }}</span>
                   </div>
                   <div class="price-sub-meta">
-                    <span v-if="calculatedFee.isFixed" class="price-distance-pill">
-                      📌 Tarifa Fija Preferencial
-                    </span>
                     <span
                       v-if="form.distance_km !== '' && form.distance_km !== null && Number(form.distance_km) > 0"
                       class="price-distance-pill"
                     >
-                      📍 {{ Number(form.distance_km).toFixed(1) }} km de recorrido
+                      📍 {{ Number(form.distance_km).toFixed(1) }} km
                     </span>
-                    <span class="price-local-pill">Sucursal: {{ restaurant.name }}</span>
+                    <span v-else-if="calculatedFee.isFixed" class="price-distance-pill">
+                      📌 Convenio fijo
+                    </span>
                   </div>
-                  <p class="price-rule-note">
-                    <template v-if="calculatedFee.isFixed">
-                      Configurada por el Administrador para todos los pedidos de tu establecimiento.
-                    </template>
-                    <template v-else>
-                      Cálculo RODO: $40 base + $2 por km (máximo $50 hasta 5 km)
-                    </template>
-                  </p>
                 </div>
 
                 <div class="price-amount-wrapper">
@@ -2702,180 +2589,144 @@ function resetOrderForm() {
                 </div>
               </div>
 
-              <!-- Caso 2: Fuera de cobertura o inválido -->
               <div v-else-if="calculatedFee.status === 'out_of_coverage' || calculatedFee.status === 'invalid'" class="price-alert-content">
                 <span class="alert-icon-big">⚠️</span>
                 <div>
-                  <strong class="alert-title">Fuera de cobertura o distancia inválida</strong>
+                  <strong class="alert-title">Distancia fuera de rango</strong>
                   <p class="alert-desc">{{ calculatedFee.message }}</p>
                 </div>
               </div>
 
-              <!-- Caso 3: Esperando distancia -->
               <div v-else class="price-waiting-content">
-                <span class="waiting-icon">💡</span>
+                <span class="waiting-icon">🛵</span>
                 <div>
-                  <strong>Introduce la distancia en kilómetros</strong>
-                  <p>La tarifa se calculará automáticamente en tiempo real (mínimo $40, hasta 5 km de radio).</p>
+                  <strong>Escribe la calle y colonia arriba para calcular la tarifa</strong>
                 </div>
               </div>
             </div>
+          </div>
+        </div>
 
+        <!-- PASO 3: Pago y Notas -->
+        <div class="step-block">
+          <div class="step-header">
+            <span class="step-num">3</span>
+            <h3>Pago y detalles del pedido</h3>
           </div>
 
-          <!-- Forma de pago -->
-          <div class="field-group">
-            <label for="payment_method">Forma de pago</label>
-            <select id="payment_method" v-model="form.payment_method">
-              <option value="">Seleccionar...</option>
-              <option value="Efectivo">Efectivo</option>
-              <option value="Transferencia">Transferencia</option>
-              <option value="Tarjeta / pedido pagado">Tarjeta / pedido pagado</option>
-              <option value="Pago contra entrega">Pago contra entrega</option>
-            </select>
-          </div>
-
-          <!-- Importe a cobrar -->
-          <div class="field-group">
-            <label for="amount_to_collect">Importe a cobrar (si aplica)</label>
-            <input
-              id="amount_to_collect"
-              v-model="form.amount_to_collect"
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder="Ej. 350.00"
-            >
-          </div>
-
-          <!-- ¿El cliente necesita cambio? -->
-          <div class="field-group full-width change-section">
-            <label class="checkbox-container">
-              <input v-model="form.needs_change" type="checkbox">
-              <span class="checkbox-label">Sí, el cliente pagará con un billete y necesita cambio.</span>
-            </label>
-
-            <div v-if="form.needs_change" class="change-detail-box">
-              <label for="change_option">¿Paga con cuánto? *</label>
-              <select id="change_option" v-model="form.change_option" required>
-                <option value="">Seleccionar billete...</option>
-                <option value="100">$100</option>
-                <option value="200">$200</option>
-                <option value="500">$500</option>
-                <option value="1000">$1,000</option>
-                <option value="Otro">Otro importe (especificar)</option>
+          <div class="fields-grid">
+            <div class="field-group">
+              <label for="payment_method">💳 ¿Cómo paga el cliente?</label>
+              <select id="payment_method" v-model="form.payment_method">
+                <option value="">Seleccionar forma de pago...</option>
+                <option value="Efectivo">Efectivo</option>
+                <option value="Transferencia">Transferencia</option>
+                <option value="Tarjeta / pedido pagado">Ya está pagado / Tarjeta</option>
+                <option value="Pago contra entrega">Pago contra entrega</option>
               </select>
+            </div>
 
+            <div class="field-group">
+              <label for="amount_to_collect">💵 ¿Cuánto debe cobrar el repartidor?</label>
               <input
-                v-if="form.change_option === 'Otro'"
-                v-model="form.change_other"
+                id="amount_to_collect"
+                v-model="form.amount_to_collect"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Ej. 350.00 (Dejar vacío si ya pagó)"
+              >
+            </div>
+
+            <div class="field-group full-width change-section">
+              <label class="checkbox-container">
+                <input v-model="form.needs_change" type="checkbox">
+                <span class="checkbox-label">El cliente necesita cambio de un billete</span>
+              </label>
+
+              <div v-if="form.needs_change" class="change-detail-box">
+                <label for="change_option">¿Con qué billete paga? *</label>
+                <select id="change_option" v-model="form.change_option" required>
+                  <option value="">Seleccionar billete...</option>
+                  <option value="100">$100</option>
+                  <option value="200">$200</option>
+                  <option value="500">$500</option>
+                  <option value="1000">$1,000</option>
+                  <option value="Otro">Otro monto</option>
+                </select>
+
+                <input
+                  v-if="form.change_option === 'Otro'"
+                  v-model="form.change_other"
+                  type="text"
+                  class="other-change-input"
+                  placeholder="Escribe el monto (Ej. 300)"
+                  required
+                >
+              </div>
+            </div>
+
+            <div class="field-group">
+              <label for="description">🍔 ¿Qué lleva el pedido? (opcional)</label>
+              <input
+                id="description"
+                v-model="form.description"
                 type="text"
-                class="other-change-input"
-                placeholder="Especifica el monto o billete (Ej. 300)"
-                required
+                placeholder="Ej. 2 pizzas grandes y 1 refresco"
+              >
+            </div>
+
+            <div class="field-group">
+              <label for="comments">📝 Nota para el repartidor (opcional)</label>
+              <input
+                id="comments"
+                v-model="form.comments"
+                type="text"
+                placeholder="Ej. Tocar timbre negro, pedir código"
               >
             </div>
           </div>
 
-          <!-- Descripción del pedido -->
-          <div class="field-group full-width">
-            <label for="description">Descripción del pedido</label>
-            <textarea
-              id="description"
-              v-model="form.description"
-              rows="3"
-              placeholder="Ej. 2 pizzas grandes; refresco de 2L"
-            />
-          </div>
-
-          <!-- Comentarios para el repartidor -->
-          <div class="field-group full-width">
-            <label for="comments">Comentarios para el repartidor</label>
-            <textarea
-              id="comments"
-              v-model="form.comments"
-              rows="3"
-              placeholder="Instrucciones específicas de recolección o entrega"
-            />
-          </div>
-
-        </div>
-
-        <!-- Sección 2: Nivel de cuidado del pedido -->
-        <div class="care-section">
-          <div class="section-heading">
-            <h3>2. Nivel de cuidado del pedido</h3>
-            <p class="sub">Marca todas las indicaciones que correspondan.</p>
-          </div>
-
-          <div class="care-options-grid">
-            <label
-              v-for="item in careList"
-              :key="item.value"
-              class="care-option-card"
-              :class="{ 'care-selected': form.care_instructions.includes(item.value) }"
-            >
-              <input
-                v-model="form.care_instructions"
-                type="checkbox"
-                :value="item.value"
+          <!-- Cuidados rápidos en chips grandes -->
+          <div class="care-compact-block">
+            <span class="care-compact-title">⚠️ Cuidados especiales (toca los que apliquen):</span>
+            <div class="care-options-grid">
+              <label
+                v-for="item in careList"
+                :key="item.value"
+                class="care-option-card"
+                :class="{ 'care-selected': form.care_instructions.includes(item.value) }"
               >
-              <span>{{ item.label }}</span>
-            </label>
-          </div>
-
-          <!-- Otra indicación de cuidado -->
-          <div class="field-group" style="margin-top: 14px;">
-            <label for="care_other">Otra indicación de cuidado</label>
-            <input
-              id="care_other"
-              v-model="form.care_other"
-              type="text"
-              placeholder="Ej. No inclinar la bolsa, llevar térmico"
-            >
+                <input
+                  v-model="form.care_instructions"
+                  type="checkbox"
+                  :value="item.value"
+                >
+                <span>{{ item.label }}</span>
+              </label>
+            </div>
           </div>
 
           <!-- Checkbox Pedido Listo -->
           <label class="checkbox-container ready-checkbox-box">
             <input v-model="form.is_ready" type="checkbox">
-            <span class="checkbox-label font-bold">El pedido ya está listo; necesito que RODO envíe al repartidor.</span>
+            <span class="checkbox-label font-bold">✅ El pedido ya está listo para recoger en mostrador</span>
           </label>
         </div>
 
-        <!-- Botón de envío -->
+        <!-- Botón grande de envío -->
         <button
           type="submit"
           class="btn-submit-order"
           :disabled="loading || calculatedFee.status === 'out_of_coverage' || calculatedFee.status === 'invalid'"
         >
           <span v-if="loading" class="mini-spinner mr-2" />
-          {{ loading ? 'Solicitando entrega...' : 'Solicitar entrega' }}
+          {{ loading ? 'Enviando pedido...' : '🛵 Solicitar Repartidor Ahora' }}
         </button>
-
-        <!-- Botón de Asistencia directa por WhatsApp (415 101 9920) -->
-        <div class="assistance-box">
-          <div class="assistance-info">
-            <strong>¿Algún inconveniente con el envío o con el repartidor?</strong>
-            <span>Comunícate de inmediato con soporte para resolver cualquier detalle.</span>
-          </div>
-          <a
-            :href="assistanceWhatsappUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="btn-assistance-form"
-          >
-            <span>🎧</span>
-            <span>Asistencia</span>
-          </a>
-        </div>
-
-        <p class="footer-help">
-          Los datos se registran directamente en el sistema central de RODO Moto Mandados para su coordinación inmediata.
-        </p>
 
       </form>
 
-      <!-- Card 2: Solicitar repartidores rápidamente -->
+      <!-- Card 2: Solicitar varios repartidores rápidamente (Sólo buscador escrito, sin menú desplegable) -->
       <section v-if="restaurant && !result && activePortalTab === 'form'" class="card quick-riders-card">
 
         <!-- Estado: Confirmación de Solicitud de Repartidores Enviada -->
@@ -2883,32 +2734,32 @@ function resetOrderForm() {
           <div class="quick-result-header">
             <div class="quick-check-badge">⚡</div>
             <div>
-              <h3>¡Solicitud de repartidores enviada al líder!</h3>
-              <p class="sub">Se generó la URL en tiempo real para coordinar el envío de tus repartidores.</p>
+              <h3>¡Solicitud de repartidores enviada!</h3>
+              <p class="sub">Envía el ticket por WhatsApp al líder para coordinar las motos.</p>
             </div>
           </div>
 
           <div class="quick-summary-grid">
             <div class="summary-box">
-              <span class="box-label">FOLIO DE SOLICITUD</span>
+              <span class="box-label">FOLIO</span>
               <strong class="box-value folio-mono">{{ quickResult.folio }}</strong>
             </div>
             <div class="summary-box">
-              <span class="box-label">REPARTIDORES PEDIDOS</span>
+              <span class="box-label">REPARTIDORES</span>
               <strong class="box-value riders-highlight">
                 {{ quickResult.riders_count }} {{ quickResult.riders_count === 1 ? 'Repartidor' : 'Repartidores' }} 🛵
               </strong>
             </div>
             <div class="summary-box">
-              <span class="box-label">USOS DISPONIBLES HOY</span>
+              <span class="box-label">USOS RESTANTES HOY</span>
               <span class="badge-status" :class="quickLimitReached ? 'status-limit-reached' : 'status-pending'">
-                {{ riderRequestsUsage.remaining_today }} de {{ riderRequestsUsage.daily_limit }} restantes
+                {{ riderRequestsUsage.remaining_today }} de {{ riderRequestsUsage.daily_limit }}
               </span>
             </div>
           </div>
 
           <div v-if="Array.isArray(quickResult.zones) && quickResult.zones.length" class="quick-zones-preview">
-            <span class="quick-zones-title">📍 Zonas / colonias asignadas por repartidor:</span>
+            <span class="quick-zones-title">📍 Colonias seleccionadas:</span>
             <ul class="quick-zones-list">
               <li v-for="(zoneName, zIdx) in quickResult.zones" :key="'res-zone-' + zIdx">
                 <span class="zone-rider-tag">🛵 Repartidor {{ zIdx + 1 }}:</span>
@@ -2918,29 +2769,10 @@ function resetOrderForm() {
           </div>
 
           <div v-if="quickResult.note" class="quick-note-preview">
-            <strong>Nota enviada:</strong> “{{ quickResult.note }}”
+            <strong>Nota:</strong> “{{ quickResult.note }}”
           </div>
 
-          <!-- Botones de Acción para la Solicitud -->
           <div class="result-action-buttons">
-            <router-link
-              :to="'/solicitud/' + quickResult.public_token"
-              target="_blank"
-              class="action-btn btn-view-ticket"
-            >
-              <span>👁️</span>
-              <span>Ver página de solicitud</span>
-            </router-link>
-
-            <button
-              type="button"
-              class="action-btn btn-copy"
-              @click="copyQuickRiderLink"
-            >
-              <span>🔗</span>
-              <span>{{ quickCopySuccess ? '¡Enlace copiado!' : 'Copiar enlace de solicitud' }}</span>
-            </button>
-
             <a
               :href="quickWhatsappUrl"
               target="_blank"
@@ -2951,25 +2783,43 @@ function resetOrderForm() {
               <span>Enviar por WhatsApp al líder</span>
             </a>
 
+            <router-link
+              :to="'/solicitud/' + quickResult.public_token"
+              target="_blank"
+              class="action-btn btn-view-ticket"
+            >
+              <span>👁️</span>
+              <span>Ver ticket de solicitud</span>
+            </router-link>
+
+            <button
+              type="button"
+              class="action-btn btn-copy"
+              @click="copyQuickRiderLink"
+            >
+              <span>🔗</span>
+              <span>{{ quickCopySuccess ? '¡Enlace copiado!' : 'Copiar enlace' }}</span>
+            </button>
+
             <button
               type="button"
               class="action-btn btn-reset"
               @click="resetQuickRequest"
             >
               <span>➕</span>
-              <span>{{ quickLimitReached ? 'Volver al panel' : 'Hacer otra solicitud' }}</span>
+              <span>{{ quickLimitReached ? 'Cerrar' : 'Nueva solicitud' }}</span>
             </button>
           </div>
         </div>
 
-        <!-- Estado: Formulario para solicitar repartidores -->
+        <!-- Estado: Formulario limpio para pedir de 1 a 4 repartidores con buscador escrito -->
         <div v-else>
           <div class="quick-header-row">
             <div class="quick-header">
               <div class="lightning-icon">⚡</div>
               <div>
-                <h3>Solicitar repartidores rápidamente</h3>
-                <p class="sub">Para cuando tienes múltiples pedidos listos o mucha demanda en el mostrador del local.</p>
+                <h3>Pedir varios repartidores a la vez</h3>
+                <p class="sub">Elige cuántos repartidores necesitas y escribe la colonia de cada uno.</p>
               </div>
             </div>
 
@@ -2977,22 +2827,17 @@ function resetOrderForm() {
               class="quick-usage-pill"
               :class="quickLimitReached ? 'usage-pill-exhausted' : 'usage-pill-ok'"
             >
-              <span>⚡ Usos hoy:</span>
-              <strong>{{ riderRequestsUsage.used_today }} / {{ riderRequestsUsage.daily_limit }}</strong>
-              <span class="usage-sub">
-                ({{ riderRequestsUsage.remaining_today }} {{ riderRequestsUsage.remaining_today === 1 ? 'disponible' : 'disponibles' }})
-              </span>
+              <span>⚡ Disponibles hoy:</span>
+              <strong>{{ riderRequestsUsage.remaining_today }} de {{ riderRequestsUsage.daily_limit }}</strong>
             </div>
           </div>
 
           <div v-if="quickLimitReached" class="quick-limit-banner">
-            <strong>🔒 Límite diario alcanzado ({{ riderRequestsUsage.daily_limit }} de {{ riderRequestsUsage.daily_limit }} usos hoy)</strong>
-            <p>
-              Para evitar saturación, cada restaurante cuenta con <strong>{{ riderRequestsUsage.daily_limit }} solicitudes rápidas al día</strong>.
-              Aún puedes registrar pedidos individuales en el formulario principal de arriba o solicitar asistencia por WhatsApp.
-            </p>
+            <strong>🔒 Ya utilizaste tus {{ riderRequestsUsage.daily_limit }} solicitudes rápidas de hoy</strong>
+            <p>Mañana tendrás nuevamente 3 usos disponibles. Puedes seguir pidiendo repartidores de uno por uno en el formulario de arriba.</p>
           </div>
 
+          <!-- Botones grandes 1, 2, 3, 4 Repartidores -->
           <div class="rider-options-grid" :class="{ 'grid-disabled': quickLimitReached }">
             <button
               v-for="count in [1, 2, 3, 4]"
@@ -3008,121 +2853,97 @@ function resetOrderForm() {
             </button>
           </div>
 
-          <!-- Listas desplegables dinámicas según la cantidad de repartidores solicitados (1 a 4) -->
+          <!-- Buscador escrito por cada repartidor (Sin menú desplegable) -->
           <div class="rider-zones-section" :class="{ 'grid-disabled': quickLimitReached }">
-            <div class="rider-zones-header">
-              <span class="rider-zones-label">
-                📍 Destino / Colonia por repartidor ({{ selectedRiders }} {{ selectedRiders === 1 ? 'lista desplegable' : 'listas desplegables' }}) <span class="req">*</span>
-              </span>
-              <span class="rider-zones-hint">Selecciona hacia qué zona va cada repartidor solicitado</span>
-            </div>
-
             <div class="rider-zones-grid">
               <div
                 v-for="idx in selectedRiders"
-                :key="'rider-zone-select-' + idx"
+                :key="'rider-zone-search-' + idx"
                 class="rider-zone-field"
                 :class="{ 'zone-field-selected': Boolean(selectedRiderZones[idx - 1]) }"
               >
-                <label :for="'rider_zone_' + idx" class="rider-zone-item-label">
+                <div class="rider-zone-item-label">
                   <span class="rider-badge-num">🛵 Repartidor {{ idx }}</span>
-                  <span
-                    v-if="selectedRiderZones[idx - 1]"
-                    class="zone-selected-chip"
-                  >
-                    ✓ Zona elegida
-                  </span>
-                  <span v-else>Colonia / Localidad de entrega</span>
-                </label>
+                  <span v-if="selectedRiderZones[idx - 1]" class="zone-selected-chip">✓ Listo</span>
+                  <span v-else class="zone-pending-hint">Escribe y toca la colonia</span>
+                </div>
 
-                <!-- Buscador de texto rápido para filtrar la lista desplegable -->
-                <div class="zone-search-box">
-                  <span class="zone-search-icon">🔍</span>
-                  <input
-                    :id="'rider_zone_search_' + idx"
-                    v-model="riderZoneSearchQueries[idx - 1]"
-                    type="text"
-                    class="zone-search-input"
+                <!-- Si ya eligió colonia: mostrar tarjeta grande y clara con botón "Cambiar" -->
+                <div v-if="selectedRiderZones[idx - 1]" class="zone-chosen-card">
+                  <div class="zone-chosen-info">
+                    <span class="zone-chosen-pin">📍</span>
+                    <strong class="zone-chosen-name">{{ selectedRiderZones[idx - 1] }}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    class="btn-change-zone"
                     :disabled="quickLimitReached || quickLoading"
-                    :placeholder="`Buscar colonia para Repartidor ${idx} (ej. Centro, Aurora, Allende)...`"
-                    autocomplete="off"
-                    @keydown.enter.prevent="handleZoneSearchEnter(idx - 1)"
+                    @click="clearSelectedZoneForRider(idx - 1)"
                   >
-                  <span
-                    v-if="riderZoneSearchQueries[idx - 1]"
-                    class="zone-match-counter"
-                  >
-                    {{ getZoneMatchCountForRider(idx - 1) }}
-                  </span>
-                  <button
-                    v-if="riderZoneSearchQueries[idx - 1]"
-                    type="button"
-                    class="zone-search-clear"
-                    title="Limpiar búsqueda"
-                    @click="clearZoneSearchForRider(idx - 1)"
-                  >
-                    ✕
+                    Cambiar
                   </button>
                 </div>
 
-                <!-- Sugerencias rápidas al escribir en el buscador -->
-                <div
-                  v-if="riderZoneSearchQueries[idx - 1] && getQuickMatchesForRider(idx - 1).length"
-                  class="zone-quick-suggestions"
-                >
-                  <button
-                    v-for="sug in getQuickMatchesForRider(idx - 1)"
-                    :key="'sug-' + idx + '-' + sug"
-                    type="button"
-                    class="zone-suggestion-btn"
-                    :class="{ 'is-active': selectedRiderZones[idx - 1] === sug }"
-                    @click="selectZoneForRider(idx - 1, sug)"
-                  >
-                    <span>📍 {{ sug }}</span>
-                    <span class="sug-pick-tag">Elegir</span>
-                  </button>
-                </div>
-                <div
-                  v-else-if="riderZoneSearchQueries[idx - 1] && getZoneMatchCountForRider(idx - 1) === 0"
-                  class="zone-no-matches"
-                >
-                  Sin coincidencias para “{{ riderZoneSearchQueries[idx - 1] }}”. Prueba con otro nombre.
-                </div>
+                <!-- Si aún no elige colonia: mostrar únicamente la barra de búsqueda escrita y resultados -->
+                <template v-else>
+                  <div class="zone-search-box">
+                    <span class="zone-search-icon">🔍</span>
+                    <input
+                      :id="'rider_zone_search_' + idx"
+                      v-model="riderZoneSearchQueries[idx - 1]"
+                      type="text"
+                      class="zone-search-input"
+                      :disabled="quickLimitReached || quickLoading"
+                      :placeholder="`Escribe la colonia del Repartidor ${idx} (ej. Centro, Aurora)...`"
+                      autocomplete="off"
+                      @keydown.enter.prevent="handleZoneSearchEnter(idx - 1)"
+                    >
+                    <button
+                      v-if="riderZoneSearchQueries[idx - 1]"
+                      type="button"
+                      class="zone-search-clear"
+                      title="Borrar texto"
+                      @click="clearZoneSearchForRider(idx - 1)"
+                    >
+                      ✕
+                    </button>
+                  </div>
 
-                <!-- Lista desplegable filtrada en tiempo real -->
-                <select
-                  :id="'rider_zone_' + idx"
-                  v-model="selectedRiderZones[idx - 1]"
-                  class="rider-zone-select"
-                  :disabled="quickLimitReached || quickLoading"
-                >
-                  <option value="">
-                    {{
-                      riderZoneSearchQueries[idx - 1]
-                        ? `-- Selecciona entre ${getZoneMatchCountForRider(idx - 1)} coincidencias (Repartidor ${idx}) --`
-                        : `-- Selecciona la colonia o localidad para el Repartidor ${idx} --`
-                    }}
-                  </option>
-                  <option
-                    v-for="zoneItem in getFilteredZonesForRider(idx - 1)"
-                    :key="'r' + idx + '-' + zoneItem"
-                    :value="zoneItem"
+                  <!-- Resultados al escribir -->
+                  <div
+                    v-if="riderZoneSearchQueries[idx - 1] && getQuickMatchesForRider(idx - 1).length"
+                    class="zone-quick-suggestions"
                   >
-                    {{ zoneItem }}
-                  </option>
-                </select>
+                    <button
+                      v-for="sug in getQuickMatchesForRider(idx - 1)"
+                      :key="'sug-' + idx + '-' + sug"
+                      type="button"
+                      class="zone-suggestion-btn"
+                      @click="selectZoneForRider(idx - 1, sug)"
+                    >
+                      <span>📍 {{ sug }}</span>
+                      <span class="sug-pick-tag">Elegir</span>
+                    </button>
+                  </div>
+                  <div
+                    v-else-if="riderZoneSearchQueries[idx - 1] && getZoneMatchCountForRider(idx - 1) === 0"
+                    class="zone-no-matches"
+                  >
+                    No se encontró “{{ riderZoneSearchQueries[idx - 1] }}”. Intenta con otra palabra.
+                  </div>
+                </template>
               </div>
             </div>
           </div>
 
-          <div class="field-group" style="margin-top: 16px;">
-            <label for="quick_note">Nota o mensaje (opcional)</label>
+          <div class="field-group" style="margin-top: 14px;">
+            <label for="quick_note">📝 Nota adicional (opcional)</label>
             <input
               id="quick_note"
               v-model="quickNote"
               type="text"
               :disabled="quickLimitReached || quickLoading"
-              placeholder="Ej. Pedidos listos en mostrador, llevar mochilas térmicas"
+              placeholder="Ej. Pedidos listos en mostrador"
             >
           </div>
 
@@ -3140,16 +2961,12 @@ function resetOrderForm() {
               Enviando solicitud...
             </template>
             <template v-else-if="!areAllRiderZonesSelected">
-              Selecciona la colonia de {{ selectedRiders === 1 ? 'tu repartidor' : `los ${selectedRiders} repartidores` }} para enviar
+              Escribe y elige la colonia de {{ selectedRiders === 1 ? 'tu repartidor' : `los ${selectedRiders} repartidores` }}
             </template>
             <template v-else>
-              Solicitar {{ selectedRiders }} repartidor{{ selectedRiders > 1 ? 'es' : '' }} ahora ({{ riderRequestsUsage.remaining_today }} {{ riderRequestsUsage.remaining_today === 1 ? 'uso disponible' : 'usos disponibles' }})
+              ⚡ Solicitar {{ selectedRiders }} repartidor{{ selectedRiders > 1 ? 'es' : '' }} ahora
             </template>
           </button>
-
-          <p class="help-micro" style="margin-top: 10px;">
-            Al presionar este botón se generará un ticket oficial con las colonias seleccionadas y podrás enviarlo por WhatsApp al líder. Máximo 3 usos por día.
-          </p>
         </div>
 
       </section>
@@ -3241,6 +3058,27 @@ function resetOrderForm() {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.btn-assistance-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 13.5px;
+  font-weight: 800;
+  text-decoration: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-assistance-header:hover {
+  background: #f8fafc;
+  transform: translateY(-1px);
 }
 
 .logo-box {
@@ -3970,57 +3808,119 @@ function resetOrderForm() {
   font-weight: 700;
 }
 
-/* Caja de escaneo OCR */
+/* Caja de escaneo OCR compacta */
 .scan-box {
-  border: 1.5px dashed #e4a1a5;
-  background: #fff9f9;
+  border: 1.5px dashed #e2e8f0;
+  background: #f8fafc;
   border-radius: 14px;
-  padding: 18px;
-  margin-bottom: 22px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
   transition: border-color 0.2s ease;
 }
 
 .scan-box:hover {
-  border-color: #d71920;
+  border-color: #cbd5e1;
 }
 
-.scan-header {
+.scan-compact-bar {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: space-between;
   gap: 14px;
-  margin-bottom: 14px;
+  flex-wrap: wrap;
 }
 
-.scan-icon-badge {
-  font-size: 28px;
+.scan-title-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 15px;
+  color: #0f172a;
+}
+
+.scan-icon-mini {
+  font-size: 20px;
   background: #fee2e2;
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
   display: grid;
   place-items: center;
   flex-shrink: 0;
 }
 
-.scan-text h4 {
-  margin: 0 0 5px;
-  font-size: 16px;
-  font-weight: 700;
-  color: #111827;
-}
-
-.scan-text p {
-  margin: 0;
-  font-size: 13px;
+.scan-optional-tag {
+  font-size: 11.5px;
+  font-weight: 800;
   color: #64748b;
-  line-height: 1.45;
+  background: #e2e8f0;
+  padding: 2px 9px;
+  border-radius: 999px;
 }
 
 .scan-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+/* Bloques numerados simples y legibles */
+.step-block {
+  background: #ffffff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 20px 22px;
+  margin-bottom: 18px;
+}
+
+.step-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.step-num {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #d71920;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 900;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.step-header h4 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.req {
+  color: #d71920;
+  font-weight: 900;
+}
+
+.care-compact-block {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.care-compact-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 800;
+  color: #1e293b;
+  margin-bottom: 10px;
 }
 
 .btn-scan {
@@ -4204,8 +4104,8 @@ function resetOrderForm() {
 .fields-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 18px 22px;
-  margin-bottom: 24px;
+  gap: 16px 20px;
+  margin-bottom: 0;
 }
 
 .field-group {
@@ -4219,22 +4119,23 @@ function resetOrderForm() {
 }
 
 label {
-  font-size: 13px;
-  font-weight: 700;
-  color: #202124;
+  font-size: 14.5px;
+  font-weight: 800;
+  color: #0f172a;
 }
 
 input,
 select,
 textarea {
   width: 100%;
-  border: 1.5px solid #d5d7dc;
-  border-radius: 10px;
-  padding: 12px 14px;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 13px 15px;
+  min-height: 48px;
   font: inherit;
-  font-size: 14px;
+  font-size: 15.5px;
   background: #ffffff;
-  color: #202124;
+  color: #0f172a;
   box-sizing: border-box;
   transition: all 0.15s ease;
 }
@@ -4244,7 +4145,7 @@ select:focus,
 textarea:focus {
   outline: none;
   border-color: #d71920;
-  box-shadow: 0 0 0 3px rgba(215, 25, 32, 0.12);
+  box-shadow: 0 0 0 3px rgba(215, 25, 32, 0.14);
 }
 
 textarea {
@@ -5055,21 +4956,64 @@ textarea {
   padding: 7px 10px;
 }
 
-.rider-zone-select {
-  width: 100%;
-  font-size: 14px;
-  padding: 10px 12px;
-  border-radius: 9px;
-  border: 1.5px solid #cbd5e1;
-  background-color: #ffffff;
-  color: #0f172a;
-  font-weight: 600;
+.zone-pending-hint {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 2px 8px;
+  border-radius: 999px;
 }
 
-.rider-zone-select:focus {
-  border-color: #d71920;
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(215, 25, 32, 0.12);
+.zone-chosen-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: #ffffff;
+  border: 1.5px solid #4ade80;
+  border-radius: 10px;
+  padding: 11px 12px;
+}
+
+.zone-chosen-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.zone-chosen-pin {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.zone-chosen-name {
+  font-size: 14px;
+  font-weight: 800;
+  color: #14532d;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.btn-change-zone {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+  font-size: 12.5px;
+  font-weight: 800;
+  padding: 7px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.btn-change-zone:hover {
+  background: #fee2e2;
+  border-color: #fda4af;
+  color: #be123c;
 }
 
 .quick-zones-preview {
@@ -5493,6 +5437,9 @@ textarea {
   .care-options-grid {
     grid-template-columns: repeat(2, 1fr);
   }
+  .rider-zones-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 640px) {
@@ -5510,11 +5457,12 @@ textarea {
   .brand-text h1 {
     font-size: 18px;
   }
-  .brand-text p {
-    font-size: 11px;
+  .header-right-actions {
+    width: 100%;
+    justify-content: space-between;
   }
   .header-restaurant-pill {
-    width: 100%;
+    flex: 1;
     justify-content: space-between;
     box-sizing: border-box;
   }
@@ -5522,12 +5470,16 @@ textarea {
     padding: 0 12px 40px;
     margin: 14px auto;
   }
-  .intro-section h2 {
-    font-size: 21px;
-  }
   .card {
     padding: 16px 14px;
     border-radius: 14px;
+  }
+  .step-block {
+    padding: 16px 14px;
+    border-radius: 14px;
+  }
+  .step-header h4 {
+    font-size: 15.5px;
   }
   input,
   select,
@@ -5536,11 +5488,16 @@ textarea {
     padding: 12px;
   }
   .scan-box {
-    padding: 14px;
+    padding: 12px 14px;
+  }
+  .scan-compact-bar {
+    flex-direction: column;
+    align-items: stretch;
   }
   .scan-actions {
     flex-direction: column;
     align-items: stretch;
+    width: 100%;
   }
   .btn-scan {
     width: 100%;
@@ -5592,22 +5549,20 @@ textarea {
   .quick-zones-list {
     grid-template-columns: 1fr;
   }
+  .zone-chosen-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .btn-change-zone {
+    width: 100%;
+    text-align: center;
+  }
   .result-summary-grid,
   .quick-summary-grid {
     grid-template-columns: 1fr;
   }
   .result-action-buttons {
     grid-template-columns: 1fr;
-  }
-  .btn-assistance-top,
-  .btn-assistance-form {
-    width: 100%;
-    justify-content: center;
-    box-sizing: border-box;
-  }
-  .assistance-box {
-    flex-direction: column;
-    align-items: stretch;
   }
 }
 </style>
