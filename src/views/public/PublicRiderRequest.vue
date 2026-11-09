@@ -169,8 +169,26 @@ onMounted(() => {
           <div class="restaurant-card">
             <div class="restaurant-icon">🏬</div>
             <div class="restaurant-meta">
-              <strong class="restaurant-name">{{ riderRequest.restaurant?.name || 'Local autorizdo' }}</strong>
+              <strong class="restaurant-name">{{ riderRequest.restaurant?.name || 'Local autorizado' }}</strong>
               <span class="restaurant-code-badge">Código de sucursal: #{{ riderRequest.restaurant?.code }}</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Zonas / Colonias de destino por repartidor -->
+        <section
+          v-if="Array.isArray(riderRequest.zones) && riderRequest.zones.length"
+          class="info-section"
+        >
+          <h2 class="section-title">DESTINO / COLONIA POR REPARTIDOR</h2>
+          <div class="zones-ticket-grid">
+            <div
+              v-for="(zoneName, idx) in riderRequest.zones"
+              :key="'ticket-zone-' + idx"
+              class="zone-ticket-item"
+            >
+              <span class="zone-ticket-rider">🛵 REPARTIDOR {{ idx + 1 }}</span>
+              <strong class="zone-ticket-name">📍 {{ zoneName }}</strong>
             </div>
           </div>
         </section>
@@ -499,6 +517,35 @@ onMounted(() => {
   font-size: 13px;
   font-weight: 700;
   color: #d71920;
+}
+
+.zones-ticket-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.zone-ticket-item {
+  background: #fff5f5;
+  border: 1.5px solid #fecdd3;
+  border-radius: 12px;
+  padding: 13px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.zone-ticket-rider {
+  font-size: 11px;
+  font-weight: 900;
+  color: #be123c;
+  letter-spacing: 0.6px;
+}
+
+.zone-ticket-name {
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
 }
 
 .note-box {

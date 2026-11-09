@@ -54,3 +54,4 @@ export async function fetchAppBranding() {
   }
   return appBranding
 }
+

@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api, { initializeCsrf } from '../../services/api'
 import { appBranding, applyBrandingState, fetchAppBranding } from '../../services/branding'
+import { SAN_MIGUEL_ZONES } from '../../constants/sanMiguelZones'
 
 const router = useRouter()
 
@@ -1237,12 +1238,48 @@ function clearTicketPhoto() {
   ocrStatus.value = 'Toma una foto nítida del ticket o pega el texto del pedido para distribuir los datos automáticamente.'
 }
 
-// Solicitud rápida de repartidores
+// Solicitud rápida de repartidores (Máximo 3 usos por día + Zonas por repartidor)
 const selectedRiders = ref(1)
+const selectedRiderZones = ref(['', '', '', ''])
 const quickNote = ref('')
 const quickLoading = ref(false)
 const quickResult = ref(null)
 const quickCopySuccess = ref(false)
+
+const riderRequestsUsage = reactive({
+  daily_limit: 3,
+  used_today: 0,
+  remaining_today: 3,
+})
+
+function applyRiderRequestsUsage(usage) {
+  if (!usage || typeof usage !== 'object') return
+  if (usage.daily_limit !== undefined) {
+    riderRequestsUsage.daily_limit = Number(usage.daily_limit) || 3
+  }
+  if (usage.used_today !== undefined) {
+    riderRequestsUsage.used_today = Number(usage.used_today) || 0
+  }
+  if (usage.remaining_today !== undefined) {
+    riderRequestsUsage.remaining_today = Math.max(0, Number(usage.remaining_today) || 0)
+  } else {
+    riderRequestsUsage.remaining_today = Math.max(
+      0,
+      riderRequestsUsage.daily_limit - riderRequestsUsage.used_today
+    )
+  }
+}
+
+const quickLimitReached = computed(() => riderRequestsUsage.remaining_today <= 0)
+
+const activeRiderZones = computed(() => {
+  const count = Math.min(Math.max(Number(selectedRiders.value) || 1, 1), 4)
+  return selectedRiderZones.value.slice(0, count).map((z) => String(z || '').trim())
+})
+
+const areAllRiderZonesSelected = computed(() => {
+  return activeRiderZones.value.every((z) => z.length > 0)
+})
 
 const quickRiderUrl = computed(() => {
   if (!quickResult.value) return ''
@@ -1265,6 +1302,11 @@ const quickWhatsappUrl = computed(() => {
   const code = restaurant.value?.code || quickResult.value.restaurant?.code || ''
   const folio = quickResult.value.folio || ''
   const count = quickResult.value.riders_count || 1
+  const zonesList = Array.isArray(quickResult.value.zones) ? quickResult.value.zones : []
+  const zonesBlock = zonesList.length
+    ? `\n📍 *Zonas de destino por repartidor:*\n` +
+      zonesList.map((z, i) => `   • *Repartidor ${i + 1}:* ${z}`).join('\n')
+    : ''
   const note = quickResult.value.note ? `\n📝 *Nota:* ${quickResult.value.note}` : ''
   const codeBadge = code ? ` (#${code})` : ''
 
@@ -1275,7 +1317,7 @@ const quickWhatsappUrl = computed(() => {
     ``,
     `🏪 *Local:* ${restaurantName}${codeBadge}`,
     `📋 *Folio:* ${folio}`,
-    `🏍️ *Repartidores requeridos:* ${count}${note}`,
+    `🏍️ *Repartidores requeridos:* ${count}${zonesBlock}${note}`,
     ``,
     `📲 *Ver solicitud en tiempo real:*`,
     `👉 ${quickRiderUrl.value}`,
@@ -1315,8 +1357,13 @@ function resetQuickRequest() {
   quickResult.value = null
   quickNote.value = ''
   selectedRiders.value = 1
+  selectedRiderZones.value = ['', '', '', '']
   quickCopySuccess.value = false
-  showToast('Puedes realizar una nueva solicitud de repartidores.', 'info')
+  if (quickLimitReached.value) {
+    showToast('Has alcanzado el límite de 3 solicitudes rápidas por hoy.', 'info')
+  } else {
+    showToast('Puedes realizar una nueva solicitud de repartidores.', 'info')
+  }
 }
 
 async function submitQuickRequest() {
@@ -1325,17 +1372,44 @@ async function submitQuickRequest() {
     return
   }
 
+  if (quickLimitReached.value) {
+    showToast('Has alcanzado el límite máximo de 3 solicitudes de varios repartidores por hoy.', 'error')
+    return
+  }
+
+  if (!areAllRiderZonesSelected.value) {
+    showToast(
+      `Selecciona la colonia o localidad de destino para cada uno de los ${selectedRiders.value} repartidor(es).`,
+      'error'
+    )
+    return
+  }
+
   quickLoading.value = true
   try {
     await initializeCsrf()
     const payload = {
       riders_count: selectedRiders.value,
+      zones: activeRiderZones.value,
       note: quickNote.value.trim() ? quickNote.value.trim() : null,
     }
     const response = await api.post('/rider-requests', payload)
-    quickResult.value = response.data.data
+    const data = response.data?.data || {}
+    quickResult.value = data
+    if (data.usage) {
+      applyRiderRequestsUsage(data.usage)
+    } else {
+      riderRequestsUsage.used_today += 1
+      riderRequestsUsage.remaining_today = Math.max(
+        0,
+        riderRequestsUsage.daily_limit - riderRequestsUsage.used_today
+      )
+    }
     showToast(`¡Solicitud enviada para ${selectedRiders.value} repartidor(es)!`, 'success')
   } catch (err) {
+    if (err.response?.data?.data?.usage) {
+      applyRiderRequestsUsage(err.response.data.data.usage)
+    }
     const msg = err.response?.data?.message || 'No se pudo enviar la solicitud de repartidores.'
     showToast(msg, 'error')
   } finally {
@@ -1381,6 +1455,10 @@ async function fetchDailyOrders(silent = false) {
       restaurant.value.show_daily_kpis = Boolean(payload.show_daily_kpis)
     } else if (payload.restaurant?.show_daily_kpis !== undefined && restaurant.value) {
       restaurant.value.show_daily_kpis = Boolean(payload.restaurant.show_daily_kpis)
+    }
+
+    if (payload.rider_requests_usage) {
+      applyRiderRequestsUsage(payload.rider_requests_usage)
     }
 
     if (payload.summary) {
@@ -1575,6 +1653,9 @@ onMounted(async () => {
     restaurant.value = response.data.data
     if (restaurant.value?.branding) {
       applyBrandingState(restaurant.value.branding)
+    }
+    if (restaurant.value?.rider_requests_usage) {
+      applyRiderRequestsUsage(restaurant.value.rider_requests_usage)
     }
     if (restaurant.value?.code) {
       localStorage.setItem('rodo_restaurant_code', restaurant.value.code)
@@ -2747,9 +2828,21 @@ function resetOrderForm() {
               </strong>
             </div>
             <div class="summary-box">
-              <span class="box-label">ESTADO ACTUAL</span>
-              <span class="badge-status status-pending">Pendiente de asignación</span>
+              <span class="box-label">USOS DISPONIBLES HOY</span>
+              <span class="badge-status" :class="quickLimitReached ? 'status-limit-reached' : 'status-pending'">
+                {{ riderRequestsUsage.remaining_today }} de {{ riderRequestsUsage.daily_limit }} restantes
+              </span>
             </div>
+          </div>
+
+          <div v-if="Array.isArray(quickResult.zones) && quickResult.zones.length" class="quick-zones-preview">
+            <span class="quick-zones-title">📍 Zonas / colonias asignadas por repartidor:</span>
+            <ul class="quick-zones-list">
+              <li v-for="(zoneName, zIdx) in quickResult.zones" :key="'res-zone-' + zIdx">
+                <span class="zone-rider-tag">🛵 Repartidor {{ zIdx + 1 }}:</span>
+                <strong>{{ zoneName }}</strong>
+              </li>
+            </ul>
           </div>
 
           <div v-if="quickResult.note" class="quick-note-preview">
@@ -2792,28 +2885,50 @@ function resetOrderForm() {
               @click="resetQuickRequest"
             >
               <span>➕</span>
-              <span>Hacer otra solicitud</span>
+              <span>{{ quickLimitReached ? 'Volver al panel' : 'Hacer otra solicitud' }}</span>
             </button>
           </div>
         </div>
 
         <!-- Estado: Formulario para solicitar repartidores -->
         <div v-else>
-          <div class="quick-header">
-            <div class="lightning-icon">⚡</div>
-            <div>
-              <h3>Solicitar repartidores rápidamente</h3>
-              <p class="sub">Para cuando tienes múltiples pedidos listos o mucha demanda en el mostrador del local.</p>
+          <div class="quick-header-row">
+            <div class="quick-header">
+              <div class="lightning-icon">⚡</div>
+              <div>
+                <h3>Solicitar repartidores rápidamente</h3>
+                <p class="sub">Para cuando tienes múltiples pedidos listos o mucha demanda en el mostrador del local.</p>
+              </div>
+            </div>
+
+            <div
+              class="quick-usage-pill"
+              :class="quickLimitReached ? 'usage-pill-exhausted' : 'usage-pill-ok'"
+            >
+              <span>⚡ Usos hoy:</span>
+              <strong>{{ riderRequestsUsage.used_today }} / {{ riderRequestsUsage.daily_limit }}</strong>
+              <span class="usage-sub">
+                ({{ riderRequestsUsage.remaining_today }} {{ riderRequestsUsage.remaining_today === 1 ? 'disponible' : 'disponibles' }})
+              </span>
             </div>
           </div>
 
-          <div class="rider-options-grid">
+          <div v-if="quickLimitReached" class="quick-limit-banner">
+            <strong>🔒 Límite diario alcanzado ({{ riderRequestsUsage.daily_limit }} de {{ riderRequestsUsage.daily_limit }} usos hoy)</strong>
+            <p>
+              Para evitar saturación, cada restaurante cuenta con <strong>{{ riderRequestsUsage.daily_limit }} solicitudes rápidas al día</strong>.
+              Aún puedes registrar pedidos individuales en el formulario principal de arriba o solicitar asistencia por WhatsApp.
+            </p>
+          </div>
+
+          <div class="rider-options-grid" :class="{ 'grid-disabled': quickLimitReached }">
             <button
               v-for="count in [1, 2, 3, 4]"
               :key="count"
               type="button"
               class="rider-btn"
               :class="{ 'active': selectedRiders === count }"
+              :disabled="quickLimitReached"
               @click="selectedRiders = count"
             >
               <strong>{{ count }}</strong>
@@ -2821,28 +2936,78 @@ function resetOrderForm() {
             </button>
           </div>
 
-          <div class="field-group" style="margin-top: 18px;">
+          <!-- Listas desplegables dinámicas según la cantidad de repartidores solicitados (1 a 4) -->
+          <div class="rider-zones-section" :class="{ 'grid-disabled': quickLimitReached }">
+            <div class="rider-zones-header">
+              <span class="rider-zones-label">
+                📍 Destino / Colonia por repartidor ({{ selectedRiders }} {{ selectedRiders === 1 ? 'lista desplegable' : 'listas desplegables' }}) <span class="req">*</span>
+              </span>
+              <span class="rider-zones-hint">Selecciona hacia qué zona va cada repartidor solicitado</span>
+            </div>
+
+            <div class="rider-zones-grid">
+              <div
+                v-for="idx in selectedRiders"
+                :key="'rider-zone-select-' + idx"
+                class="rider-zone-field"
+              >
+                <label :for="'rider_zone_' + idx" class="rider-zone-item-label">
+                  <span class="rider-badge-num">🛵 Repartidor {{ idx }}</span>
+                  <span>Colonia / Localidad de entrega</span>
+                </label>
+                <select
+                  :id="'rider_zone_' + idx"
+                  v-model="selectedRiderZones[idx - 1]"
+                  class="rider-zone-select"
+                  :disabled="quickLimitReached || quickLoading"
+                >
+                  <option value="">-- Selecciona la colonia o localidad para el Repartidor {{ idx }} --</option>
+                  <option
+                    v-for="zoneItem in SAN_MIGUEL_ZONES"
+                    :key="'r' + idx + '-' + zoneItem"
+                    :value="zoneItem"
+                  >
+                    {{ zoneItem }}
+                  </option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="field-group" style="margin-top: 16px;">
             <label for="quick_note">Nota o mensaje (opcional)</label>
             <input
               id="quick_note"
               v-model="quickNote"
               type="text"
-              placeholder="Ej. Hay cuatro pedidos listos en mostrador, llevar mochilas térmicas"
+              :disabled="quickLimitReached || quickLoading"
+              placeholder="Ej. Pedidos listos en mostrador, llevar mochilas térmicas"
             >
           </div>
 
           <button
             type="button"
             class="btn-quick-request"
-            :disabled="quickLoading"
+            :disabled="quickLoading || quickLimitReached || !areAllRiderZonesSelected"
             @click="submitQuickRequest"
           >
             <span v-if="quickLoading" class="mini-spinner mr-2" />
-            {{ quickLoading ? 'Enviando solicitud...' : `Solicitar ${selectedRiders} repartidor${selectedRiders > 1 ? 'es' : ''} ahora` }}
+            <template v-if="quickLimitReached">
+              Límite diario alcanzado (3 de 3 usados hoy)
+            </template>
+            <template v-else-if="quickLoading">
+              Enviando solicitud...
+            </template>
+            <template v-else-if="!areAllRiderZonesSelected">
+              Selecciona la colonia de {{ selectedRiders === 1 ? 'tu repartidor' : `los ${selectedRiders} repartidores` }} para enviar
+            </template>
+            <template v-else>
+              Solicitar {{ selectedRiders }} repartidor{{ selectedRiders > 1 ? 'es' : '' }} ahora ({{ riderRequestsUsage.remaining_today }} {{ riderRequestsUsage.remaining_today === 1 ? 'uso disponible' : 'usos disponibles' }})
+            </template>
           </button>
 
           <p class="help-micro" style="margin-top: 10px;">
-            Al presionar este botón se generará una URL oficial y podrás enviar el enlace por WhatsApp directamente al líder.
+            Al presionar este botón se generará un ticket oficial con las colonias seleccionadas y podrás enviarlo por WhatsApp al líder. Máximo 3 usos por día.
           </p>
         </div>
 
@@ -4450,10 +4615,75 @@ textarea {
   border-top: 3px solid #111827;
 }
 
+.quick-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .quick-header {
   display: flex;
   align-items: flex-start;
   gap: 12px;
+  flex: 1;
+  min-width: 240px;
+}
+
+.quick-usage-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.usage-pill-ok {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+}
+
+.usage-pill-exhausted {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+}
+
+.usage-sub {
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.quick-limit-banner {
+  margin-top: 14px;
+  background: #fef2f2;
+  border: 1.5px solid #fecaca;
+  border-radius: 12px;
+  padding: 14px 16px;
+  color: #991b1b;
+}
+
+.quick-limit-banner strong {
+  display: block;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.quick-limit-banner p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #7f1d1d;
+}
+
+.grid-disabled {
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .lightning-icon {
@@ -4464,13 +4694,146 @@ textarea {
   border-radius: 12px;
   display: grid;
   place-items: center;
+  flex-shrink: 0;
 }
 
 .rider-options-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 10px;
-  margin-top: 12px;
+  margin-top: 14px;
+}
+
+.rider-zones-section {
+  margin-top: 18px;
+  background: #f8fafc;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.rider-zones-header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 12px;
+}
+
+.rider-zones-label {
+  font-size: 13.5px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.rider-zones-hint {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.rider-zones-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.rider-zone-field {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 11px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rider-zone-item-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  margin: 0;
+}
+
+.rider-badge-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #fff1f2;
+  color: #be123c;
+  border: 1px solid #fecdd3;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.rider-zone-select {
+  width: 100%;
+  font-size: 14px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: 1.5px solid #cbd5e1;
+  background-color: #ffffff;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.rider-zone-select:focus {
+  border-color: #d71920;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(215, 25, 32, 0.12);
+}
+
+.quick-zones-preview {
+  background: #f8fafc;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.quick-zones-title {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: #334155;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 10px;
+}
+
+.quick-zones-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.quick-zones-list li {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  padding: 9px 12px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.zone-rider-tag {
+  font-size: 11.5px;
+  font-weight: 800;
+  color: #d71920;
+}
+
+.status-limit-reached {
+  background: #fee2e2;
+  color: #991b1b;
 }
 
 .rider-btn {
@@ -4939,6 +5302,10 @@ textarea {
   }
   .rider-options-grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+  .rider-zones-grid,
+  .quick-zones-list {
+    grid-template-columns: 1fr;
   }
   .result-summary-grid,
   .quick-summary-grid {

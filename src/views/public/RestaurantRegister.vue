@@ -128,31 +128,27 @@ async function loginRestaurant() {
         <div class="card-heading">
           <h2>Ingresar al sistema</h2>
           <p>
-            Ingresa con tu código único de 3 dígitos (ej. <strong>492</strong>) o el nombre de tu restaurante asignado por el administrador.
+            Ingresa con tu código único de 3 dígitos (ej. <strong>492</strong>)
           </p>
         </div>
 
         <form @submit.prevent="loginRestaurant">
           <div class="form-group">
             <label for="loginIdentifier">
-              Código de 3 dígitos o Nombre del local
+              Código de 3 dígitos
             </label>
 
             <input
               id="loginIdentifier"
               v-model="loginIdentifier"
               type="text"
-              placeholder="Ej. 492 o Tacos El Buen Sabor"
+              placeholder="Ej. 492"
               minlength="2"
               maxlength="150"
               autocomplete="off"
               :disabled="loginLoading"
               required
             />
-
-            <small>
-              Usa el código de 3 dígitos proporcionado por la administración de RODO.
-            </small>
           </div>
 
           <div
