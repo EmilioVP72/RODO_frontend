@@ -11,6 +11,10 @@ const props = defineProps({
     type: String, // 'origin' | 'destination'
     default: 'destination',
   },
+  role: {
+    type: String, // alias for pointType ('origin' | 'destination')
+    default: '',
+  },
   label: {
     type: String,
     default: 'Buscar dirección o lugar en el mapa',
@@ -31,12 +35,18 @@ const props = defineProps({
     type: Object, // { lat: number, lng: number } | null
     default: null,
   },
+  selectedLocation: {
+    type: Object, // alias for selectedCoords
+    default: null,
+  },
 })
 
 const emit = defineEmits([
   'update:modelValue',
   'select-location',
+  'select',
   'clear-location',
+  'clear',
 ])
 
 const searchQuery = ref(props.modelValue || '')
@@ -113,8 +123,9 @@ function selectSuggestion(item) {
   isOpen.value = false
   errorMsg.value = ''
 
-  emit('select-location', {
-    pointType: props.pointType,
+  const resolvedPointType = props.pointType || props.role || 'destination'
+  const payload = {
+    pointType: resolvedPointType,
     lat: item.lat,
     lng: item.lng,
     displayName: item.displayName,
@@ -122,7 +133,10 @@ function selectSuggestion(item) {
     street: item.street,
     neighborhood: item.neighborhood,
     city: item.city,
-  })
+  }
+
+  emit('select-location', payload)
+  emit('select', payload)
 }
 
 function clearSearch() {
@@ -131,8 +145,10 @@ function clearSearch() {
   suggestions.value = []
   isOpen.value = false
   errorMsg.value = ''
+  const resolvedPointType = props.pointType || props.role || 'destination'
   emit('update:modelValue', '')
-  emit('clear-location', { pointType: props.pointType })
+  emit('clear-location', { pointType: resolvedPointType })
+  emit('clear', { pointType: resolvedPointType })
 }
 
 onUnmounted(() => {
@@ -434,3 +450,4 @@ onUnmounted(() => {
   padding: 8px 12px;
 }
 </style>
+

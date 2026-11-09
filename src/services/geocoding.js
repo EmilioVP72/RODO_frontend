@@ -108,7 +108,6 @@ export async function searchAddressSuggestions(query, options = {}) {
       ? cleanQuery
       : `${cleanQuery}, San Miguel de Allende`,
     limit: String(limit),
-    lang: 'es',
   })
 
   if (bias && Number.isFinite(bias.lat) && Number.isFinite(bias.lng)) {
@@ -122,6 +121,7 @@ export async function searchAddressSuggestions(query, options = {}) {
     method: 'GET',
     headers: {
       Accept: 'application/json',
+      'Accept-Language': 'es,en;q=0.8',
     },
     signal: options.signal,
   })
@@ -166,12 +166,14 @@ export async function reverseGeocodeCoordinates(lat, lng, signal) {
     const params = new URLSearchParams({
       lat: String(lat),
       lon: String(lng),
-      lang: 'es',
     })
 
     const response = await fetch(`${MAP_CONFIG.reversePhotonUrl}?${params.toString()}`, {
       method: 'GET',
-      headers: { Accept: 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        'Accept-Language': 'es,en;q=0.8',
+      },
       signal,
     })
 
@@ -205,3 +207,4 @@ export async function calculateRouteFromBackend(origin, destination) {
 
   return response.data
 }
+

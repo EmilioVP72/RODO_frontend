@@ -301,79 +301,103 @@ async function calculateRouteBetweenMapPoints(originPt, destPt, showFeedbackToas
   }
 }
 
-function handleSelectLocationFromSearch(payload) {
-  if (!payload || !Number.isFinite(payload.lat) || !Number.isFinite(payload.lng)) return
+async function handleOriginSelected(payload) {
+  if (!payload) return
+  const lat = Number(payload.lat)
+  const lng = Number(payload.lng)
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return
 
-  if (payload.pointType === 'origin') {
-    mapOrigin.value = {
-      lat: payload.lat,
-      lng: payload.lng,
-      label: payload.displayName || 'Origen (Punto A)',
-    }
-    originSearchQuery.value = payload.displayName || ''
-  } else {
-    mapDestination.value = {
-      lat: payload.lat,
-      lng: payload.lng,
-      label: payload.displayName || 'Destino (Punto B)',
-    }
-    destinationSearchQuery.value = payload.displayName || ''
-    if (payload.street) {
-      form.street = payload.street
-    }
-    if (payload.neighborhood) {
-      form.neighborhood = payload.neighborhood
-    } else if (payload.title && !form.neighborhood) {
-      form.neighborhood = payload.title
-    }
-  }
-
-  if (mapOrigin.value && mapDestination.value) {
-    if (autoDistanceTimer) clearTimeout(autoDistanceTimer)
-    calculateRouteBetweenMapPoints(mapOrigin.value, mapDestination.value, true)
-  }
-}
-
-async function handleOriginMarkerChanged(coords) {
-  if (!coords) return
   mapOrigin.value = {
-    lat: coords.lat,
-    lng: coords.lng,
-    label: 'Origen ajustado en mapa',
+    lat,
+    lng,
+    label: payload.displayName || payload.label || 'Origen (Punto A)',
   }
-  const rev = await reverseGeocodeCoordinates(coords.lat, coords.lng)
-  if (rev?.displayName) {
-    originSearchQuery.value = rev.displayName
-    mapOrigin.value.label = rev.displayName
+
+  if (payload.displayName) {
+    originSearchQuery.value = payload.displayName
+  } else {
+    try {
+      const rev = await reverseGeocodeCoordinates(lat, lng)
+      if (rev?.displayName) {
+        originSearchQuery.value = rev.displayName
+        if (mapOrigin.value) {
+          mapOrigin.value.label = rev.displayName
+        }
+      }
+    } catch (e) {
+      console.warn('Reverse geocode origen falló:', e)
+    }
   }
+
   if (mapDestination.value) {
+    if (autoDistanceTimer) clearTimeout(autoDistanceTimer)
     await calculateRouteBetweenMapPoints(mapOrigin.value, mapDestination.value, false)
   }
 }
 
-async function handleDestinationMarkerChanged(coords) {
-  if (!coords) return
+async function handleDestinationSelected(payload) {
+  if (!payload) return
+  const lat = Number(payload.lat)
+  const lng = Number(payload.lng)
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return
+
   mapDestination.value = {
-    lat: coords.lat,
-    lng: coords.lng,
-    label: 'Destino seleccionado en mapa',
+    lat,
+    lng,
+    label: payload.displayName || payload.label || 'Destino (Punto B)',
   }
-  const rev = await reverseGeocodeCoordinates(coords.lat, coords.lng)
-  if (rev) {
-    destinationSearchQuery.value = rev.displayName || ''
-    mapDestination.value.label = rev.displayName || 'Destino en mapa'
-    if (rev.street && !form.street) {
-      form.street = rev.street
-    }
-    if (rev.neighborhood && !form.neighborhood) {
-      form.neighborhood = rev.neighborhood
+
+  if (payload.displayName) {
+    destinationSearchQuery.value = payload.displayName
+  }
+  if (payload.street) {
+    form.street = payload.street
+  }
+  if (payload.neighborhood) {
+    form.neighborhood = payload.neighborhood
+  } else if (payload.title && !form.neighborhood) {
+    form.neighborhood = payload.title
+  }
+
+  // Si viene de un clic directo en el mapa sin dirección escrita, hacer geocodificación inversa
+  if (!payload.displayName && !payload.street) {
+    try {
+      const rev = await reverseGeocodeCoordinates(lat, lng)
+      if (rev) {
+        if (rev.displayName) {
+          destinationSearchQuery.value = rev.displayName
+          if (mapDestination.value) {
+            mapDestination.value.label = rev.displayName
+          }
+        }
+        if (rev.street && !form.street) {
+          form.street = rev.street
+        }
+        if (rev.neighborhood && !form.neighborhood) {
+          form.neighborhood = rev.neighborhood
+        }
+      }
+    } catch (e) {
+      console.warn('Reverse geocode destino falló:', e)
     }
   }
+
   if (mapOrigin.value) {
     if (autoDistanceTimer) clearTimeout(autoDistanceTimer)
     await calculateRouteBetweenMapPoints(mapOrigin.value, mapDestination.value, true)
   }
 }
+
+// Mantener compatibilidad con llamadas internas previas
+const handleSelectLocationFromSearch = (payload) => {
+  if (payload?.pointType === 'origin') {
+    handleOriginSelected(payload)
+  } else {
+    handleDestinationSelected(payload)
+  }
+}
+const handleOriginMarkerChanged = handleOriginSelected
+const handleDestinationMarkerChanged = handleDestinationSelected
 
 function handleClearMapPoints() {
   mapDestination.value = null
