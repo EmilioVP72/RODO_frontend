@@ -32,6 +32,10 @@ defineProps({
     type: Boolean,
     default: false,
   },
+  showFee: {
+    type: Boolean,
+    default: true,
+  },
   errorMessage: {
     type: String,
     default: '',
@@ -106,7 +110,7 @@ defineProps({
         <span class="metric-sub">En motocicleta</span>
       </div>
 
-      <div class="trip-metric-box metric-fee-highlight">
+      <div v-if="showFee" class="trip-metric-box metric-fee-highlight">
         <span class="metric-label">
           {{ isFixedFee ? 'TARIFA FIJA CONVENIO' : 'TARIFA ESTIMADA' }}
         </span>

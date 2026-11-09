@@ -2819,17 +2819,7 @@ function resetOrderForm() {
 
           <!-- Módulo de Mapa Interactivo OpenStreetMap y Resumen de Ruta por Carretera -->
           <div class="open-map-routing-section">
-            <RouteMap
-              :origin="mapOrigin"
-              :destination="mapDestination"
-              :route-geometry="routeGeometry"
-              :origin-locked="hasRegisteredLocation"
-              :loading="autoDistanceLoading"
-              @update:origin="handleOriginSelected"
-              @update:destination="handleDestinationSelected"
-              @clear="handleClearMapPoints"
-            />
-
+            <!-- 1. Información de la ruta en la parte de ARRIBA del mapa -->
             <TripSummary
               :origin-address="effectiveOriginAddressLabel"
               :destination-address="effectiveDestinationAddressLabel"
@@ -2839,6 +2829,18 @@ function resetOrderForm() {
               :is-fixed-fee="hasFixedFee"
               :loading="autoDistanceLoading"
               :error="routeError"
+            />
+
+            <!-- 2. Mapa interactivo en medio -->
+            <RouteMap
+              :origin="mapOrigin"
+              :destination="mapDestination"
+              :route-geometry="routeGeometry"
+              :origin-locked="hasRegisteredLocation"
+              :loading="autoDistanceLoading"
+              @update:origin="handleOriginSelected"
+              @update:destination="handleDestinationSelected"
+              @clear="handleClearMapPoints"
             />
           </div>
 
@@ -2941,15 +2943,6 @@ function resetOrderForm() {
               <div>
                 <strong class="alert-title">Fuera de cobertura o distancia inválida</strong>
                 <p class="alert-desc">{{ calculatedFee.message }}</p>
-              </div>
-            </div>
-
-            <!-- Caso 3: Esperando distancia -->
-            <div v-else class="price-waiting-content">
-              <span class="waiting-icon">💡</span>
-              <div>
-                <strong>Introduce la distancia en kilómetros</strong>
-                <p>La tarifa se calculará automáticamente en tiempo real (mínimo $40, hasta 5 km de radio).</p>
               </div>
             </div>
           </div>
