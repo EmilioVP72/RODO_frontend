@@ -1,9 +1,12 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api, { initializeCsrf } from '../../services/api'
 
 const router = useRouter()
+
+// Pestaña activa del portal del restaurante: 'form' | 'history'
+const activePortalTab = ref('form')
 
 // Estado del restaurante y la sesión
 const restaurant = ref(null)
@@ -11,6 +14,22 @@ const loading = ref(false)
 const error = ref('')
 const result = ref(null)
 const copySuccess = ref(false)
+
+// Historial individual de pedidos del día del restaurante autenticado
+const dailyOrders = ref([])
+const dailyLoading = ref(false)
+const dailyDate = ref('')
+const historySearch = ref('')
+const historyStatusFilter = ref('all') // 'all' | 'pending' | 'completed'
+let dailyPollTimer = null
+
+const dailySummary = reactive({
+  total_orders: 0,
+  completed_orders: 0,
+  pending_orders: 0,
+  total_delivery_fees: 0,
+  total_amount_to_collect: 0,
+})
 
 // Toast de notificación
 const toastMessage = ref('')
@@ -1323,7 +1342,213 @@ async function submitQuickRequest() {
   }
 }
 
-// Carga inicial de datos de sesión
+// Carga inicial de datos de sesión y pedidos del día
+async function fetchDailyOrders(silent = false) {
+  if (!restaurant.value) return
+  if (!silent) {
+    dailyLoading.value = true
+  }
+  try {
+    const response = await api.get('/orders', {
+      params: { _t: Date.now() },
+    })
+    const payload = response.data?.data || {}
+    const list = Array.isArray(payload.orders)
+      ? payload.orders
+      : Array.isArray(payload.data)
+        ? payload.data
+        : Array.isArray(payload)
+          ? payload
+          : []
+
+    dailyOrders.value = list
+    dailyDate.value = payload.date || new Date().toLocaleDateString('es-MX')
+
+    if (payload.summary) {
+      Object.assign(dailySummary, payload.summary)
+    } else {
+      const completed = list.filter((o) => isOrderCompleted(o.status)).length
+      dailySummary.total_orders = list.length
+      dailySummary.completed_orders = completed
+      dailySummary.pending_orders = Math.max(0, list.length - completed)
+      dailySummary.total_delivery_fees = list.reduce((acc, o) => acc + Number(o.delivery_fee || 0), 0)
+      dailySummary.total_amount_to_collect = list.reduce((acc, o) => acc + Number(o.amount_to_collect || 0), 0)
+    }
+  } catch (err) {
+    console.warn('No se pudieron cargar los pedidos del día:', err)
+  } finally {
+    if (!silent) {
+      dailyLoading.value = false
+    }
+  }
+}
+
+function isOrderCompleted(status) {
+  return status === 'completed' || status === 'delivered'
+}
+
+function formatOrderTime(iso) {
+  if (!iso) return ''
+  try {
+    const d = new Date(iso)
+    return d.toLocaleTimeString('es-MX', {
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  } catch {
+    return ''
+  }
+}
+
+const todayFormattedLabel = computed(() => {
+  try {
+    return new Date().toLocaleDateString('es-MX', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+    })
+  } catch {
+    return dailyDate.value || 'Hoy'
+  }
+})
+
+const filteredDailyOrders = computed(() => {
+  const query = historySearch.value.trim().toLowerCase()
+  return dailyOrders.value.filter((order) => {
+    if (historyStatusFilter.value === 'completed' && !isOrderCompleted(order.status)) {
+      return false
+    }
+    if (historyStatusFilter.value === 'pending' && isOrderCompleted(order.status)) {
+      return false
+    }
+    if (!query) return true
+    const haystack = [
+      order.folio,
+      order.customer_name,
+      order.customer_phone,
+      order.street,
+      order.neighborhood,
+      order.address_reference,
+      order.payment_method,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+    return haystack.includes(query)
+  })
+})
+
+function getOrderTicketUrl(order) {
+  if (!order) return ''
+  if (order.ticket_url && !order.ticket_url.includes('localhost')) {
+    return order.ticket_url
+  }
+  if (order.public_token) {
+    const origin =
+      typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('localhost')
+        ? window.location.origin
+        : 'https://rodo-frontend-phi.vercel.app'
+    return `${origin}/ticket/${order.public_token}`
+  }
+  return ''
+}
+
+// Generar enlace de WhatsApp al Admin (415 101 9920) con todos los datos de un pedido específico
+function buildOrderAssistanceUrl(order) {
+  if (!order) return assistanceWhatsappUrl.value
+  const restName = restaurant.value?.name || order.restaurant?.name || 'Restaurante'
+  const restCode = restaurant.value?.code || order.restaurant?.code || ''
+  const folio = order.folio || 'S/F'
+  const timeStr = formatOrderTime(order.created_at) || 'Hoy'
+  const statusStr = isOrderCompleted(order.status) ? 'Completado' : 'Pendiente / En curso'
+  const customer = order.customer_name || 'Cliente sin nombre'
+  const phone = order.customer_phone || 'Sin teléfono'
+  const address = [order.street, order.neighborhood ? `Col. ${order.neighborhood}` : '']
+    .filter(Boolean)
+    .join(', ')
+  const refLine = order.address_reference ? `\n*Referencia:* ${order.address_reference}` : ''
+  const feeStr = `$${Number(order.delivery_fee || 0).toFixed(2)} MXN (${Number(order.distance_km || 0).toFixed(1)} km)`
+  const paymentStr = order.payment_method || 'No especificado'
+  const collectStr =
+    order.amount_to_collect !== null && order.amount_to_collect !== undefined && Number(order.amount_to_collect) > 0
+      ? ` (Cobrar $${Number(order.amount_to_collect).toFixed(2)} MXN)`
+      : ''
+  const tUrl = getOrderTicketUrl(order)
+  const ticketLine = tUrl ? `\n*Ticket Digital:* ${tUrl}` : ''
+
+  const lines = [
+    `*ASISTENCIA RODO - REPORTE DE PEDIDO*`,
+    `--------------------------------`,
+    `*Local:* ${restName}${restCode ? ` (#${restCode})` : ''}`,
+    `*Folio:* ${folio}`,
+    `*Hora de registro:* ${timeStr}`,
+    `*Estatus actual:* ${statusStr}`,
+    `*Cliente:* ${customer} (Tel: ${phone})`,
+    `*Destino:* ${address || 'No especificado'}${refLine}`,
+    `*Tarifa de envio:* ${feeStr}`,
+    `*Pago:* ${paymentStr}${collectStr}${ticketLine}`,
+    `--------------------------------`,
+    `Hola soporte RODO, solicito asistencia con este pedido por el siguiente inconveniente: `,
+  ]
+
+  return `https://api.whatsapp.com/send?phone=524151019920&text=${encodeURIComponent(lines.join('\n'))}`
+}
+
+function buildOrderShareWhatsappUrl(order) {
+  if (!order) return ''
+  const restName = restaurant.value?.name || order.restaurant?.name || 'Restaurante'
+  const restCode = restaurant.value?.code || order.restaurant?.code || ''
+  const folio = order.folio || ''
+  const fee = order.delivery_fee ? `$${Number(order.delivery_fee).toFixed(2)} MXN` : ''
+  const neighborhood = order.neighborhood || ''
+  const paymentMethod = order.payment_method || ''
+  const toCollect =
+    order.amount_to_collect !== null && order.amount_to_collect !== undefined && Number(order.amount_to_collect) > 0
+      ? `$${Number(order.amount_to_collect).toFixed(2)}`
+      : null
+  const tUrl = getOrderTicketUrl(order)
+
+  let paymentLine = ''
+  if (paymentMethod) {
+    paymentLine = `\n*Pago:* ${paymentMethod}`
+    if (toCollect) {
+      paymentLine += ` (Cobrar ${toCollect})`
+    }
+  }
+
+  const message = [
+    `*RODO MOTO MANDADOS*`,
+    `--------------------------------`,
+    `*Pedido Registrado*`,
+    ``,
+    `*Local:* ${restName}${restCode ? ` (#${restCode})` : ''}`,
+    `*Folio:* ${folio}`,
+    fee ? `*Tarifa de envio:* ${fee}` : null,
+    paymentLine ? paymentLine.trim() : null,
+    neighborhood ? `*Zona de entrega:* ${neighborhood}` : null,
+    ``,
+    `*Ver Ticket Digital y Mapa:*`,
+    tUrl,
+  ]
+    .filter((item) => item !== null)
+    .join('\n')
+
+  return `https://api.whatsapp.com/send?phone=524151805038&text=${encodeURIComponent(message)}`
+}
+
+function switchPortalTab(tab) {
+  activePortalTab.value = tab
+  if (tab === 'history') {
+    fetchDailyOrders(false)
+  }
+}
+
+function handlePortalFocus() {
+  if (restaurant.value) {
+    fetchDailyOrders(true)
+  }
+}
+
 onMounted(async () => {
   try {
     const response = await api.get('/restaurant/me')
@@ -1356,13 +1581,32 @@ onMounted(async () => {
         if (recoveryRes.data.data.code) {
           localStorage.setItem('rodo_restaurant_code', recoveryRes.data.data.code)
         }
-        return
       } catch (recoveryErr) {
         console.warn('Auto-recuperación de sesión fallida:', recoveryErr)
       }
     }
 
-    error.value = 'No hay una sesión válida. Inicia sesión con el código de tu restaurante.'
+    if (!restaurant.value) {
+      error.value = 'No hay una sesión válida. Inicia sesión con el código de tu restaurante.'
+    }
+  }
+
+  if (restaurant.value) {
+    await fetchDailyOrders(false)
+  }
+
+  window.addEventListener('focus', handlePortalFocus)
+  dailyPollTimer = setInterval(() => {
+    if (document.visibilityState === 'visible' && restaurant.value) {
+      fetchDailyOrders(true)
+    }
+  }, 20000)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('focus', handlePortalFocus)
+  if (dailyPollTimer) {
+    clearInterval(dailyPollTimer)
   }
 })
 
@@ -1451,6 +1695,7 @@ async function submitOrder() {
     const response = await api.post('/orders', payload)
     result.value = response.data.data
     showToast('¡Pedido registrado correctamente!', 'success')
+    fetchDailyOrders(true)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   } catch (err) {
     if (err.response?.status === 422) {
@@ -1532,12 +1777,41 @@ function resetOrderForm() {
 
     <main class="portal-main">
 
+      <!-- Barra de navegación entre Solicitar Entrega y Mis Pedidos de Hoy -->
+      <div v-if="restaurant" class="portal-tabs-bar">
+        <button
+          type="button"
+          :class="['portal-tab-btn', { active: activePortalTab === 'form' }]"
+          @click="switchPortalTab('form')"
+        >
+          <span>🛵</span>
+          <span>Solicitar Repartidor</span>
+        </button>
+
+        <button
+          type="button"
+          :class="['portal-tab-btn', { active: activePortalTab === 'history' }]"
+          @click="switchPortalTab('history')"
+        >
+          <span>📋</span>
+          <span>Mis Pedidos de Hoy</span>
+          <span class="portal-tab-badge">{{ dailySummary.total_orders }}</span>
+        </button>
+      </div>
+
       <!-- Título de sección con botón de retroceso rápido -->
       <div class="intro-section">
         <div class="intro-top-row">
           <div>
-            <h2>Solicitar una entrega</h2>
-            <p>Registra los datos del pedido en pocos pasos o toma una foto del ticket para intentar llenar los campos automáticamente.</p>
+            <h2>
+              {{ activePortalTab === 'history' ? 'Mis Pedidos del Día' : 'Solicitar una entrega' }}
+            </h2>
+            <p v-if="activePortalTab === 'history'">
+              Historial individual de hoy exclusivo para <strong>{{ restaurant?.name }} (#{{ restaurant?.code }})</strong>. Se limpia automáticamente al terminar el día.
+            </p>
+            <p v-else>
+              Registra los datos del pedido en pocos pasos o toma una foto del ticket para intentar llenar los campos automáticamente.
+            </p>
           </div>
           <button
             type="button"
@@ -1550,8 +1824,229 @@ function resetOrderForm() {
         </div>
       </div>
 
+      <!-- ===================================================== -->
+      <!-- PESTAÑA 2: HISTORIAL INDIVIDUAL DE PEDIDOS DEL DÍA    -->
+      <!-- ===================================================== -->
+      <section v-if="restaurant && activePortalTab === 'history'" class="daily-history-section">
+
+        <!-- Banner informativo de privacidad y corte diario -->
+        <div class="daily-notice-banner">
+          <div class="daily-notice-left">
+            <span class="daily-notice-icon">📅</span>
+            <div>
+              <strong>Jornada de hoy ({{ todayFormattedLabel }}) · {{ restaurant.name }} (#{{ restaurant.code }})</strong>
+              <p>
+                Aquí solo aparecen los pedidos registrados hoy por tu establecimiento. Al iniciar un nuevo día (00:00 hrs), esta vista comienza limpia automáticamente.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="btn-refresh-daily"
+            :disabled="dailyLoading"
+            @click="fetchDailyOrders(false)"
+          >
+            {{ dailyLoading ? '⏳ Actualizando...' : '🔄 Actualizar lista' }}
+          </button>
+        </div>
+
+        <!-- KPIs del día del restaurante -->
+        <div class="daily-kpis-grid">
+          <div class="daily-kpi-card">
+            <span class="daily-kpi-label">PEDIDOS DE HOY</span>
+            <strong class="daily-kpi-value">{{ dailySummary.total_orders }}</strong>
+            <small class="daily-kpi-sub">
+              ✅ {{ dailySummary.completed_orders }} completados · ⏳ {{ dailySummary.pending_orders }} pendientes
+            </small>
+          </div>
+
+          <div class="daily-kpi-card">
+            <span class="daily-kpi-label">TOTAL TARIFAS DE ENVÍO HOY</span>
+            <strong class="daily-kpi-value text-red">${{ Number(dailySummary.total_delivery_fees || 0).toFixed(2) }} <small>MXN</small></strong>
+            <small class="daily-kpi-sub">Tarifas de reparto acumuladas hoy</small>
+          </div>
+
+          <div class="daily-kpi-card">
+            <span class="daily-kpi-label">MONTO EN COBROS A CLIENTES HOY</span>
+            <strong class="daily-kpi-value text-emerald">${{ Number(dailySummary.total_amount_to_collect || 0).toFixed(2) }} <small>MXN</small></strong>
+            <small class="daily-kpi-sub">Efectivo / contraentrega registrado hoy</small>
+          </div>
+        </div>
+
+        <!-- Controles de búsqueda y filtro de estatus -->
+        <div class="daily-filters-bar">
+          <div class="daily-search-wrap">
+            <span>🔍</span>
+            <input
+              v-model="historySearch"
+              type="text"
+              placeholder="Buscar pedido de hoy por folio, cliente, teléfono o colonia..."
+            />
+          </div>
+
+          <div class="daily-status-pills">
+            <button
+              type="button"
+              :class="['daily-pill-btn', { active: historyStatusFilter === 'all' }]"
+              @click="historyStatusFilter = 'all'"
+            >
+              Todos ({{ dailySummary.total_orders }})
+            </button>
+            <button
+              type="button"
+              :class="['daily-pill-btn', { active: historyStatusFilter === 'pending' }]"
+              @click="historyStatusFilter = 'pending'"
+            >
+              ⏳ Pendientes ({{ dailySummary.pending_orders }})
+            </button>
+            <button
+              type="button"
+              :class="['daily-pill-btn', { active: historyStatusFilter === 'completed' }]"
+              @click="historyStatusFilter = 'completed'"
+            >
+              ✅ Completados ({{ dailySummary.completed_orders }})
+            </button>
+          </div>
+        </div>
+
+        <!-- Estado de carga -->
+        <div v-if="dailyLoading && !dailyOrders.length" class="card daily-empty-card">
+          <p>⏳ Cargando tus pedidos registrados el día de hoy...</p>
+        </div>
+
+        <!-- Lista de tarjetas de pedidos del día -->
+        <div v-else-if="filteredDailyOrders.length" class="daily-orders-list">
+          <article
+            v-for="order in filteredDailyOrders"
+            :key="order.id"
+            :class="['daily-order-card', { 'order-completed': isOrderCompleted(order.status) }]"
+          >
+            <div class="daily-order-header">
+              <div class="daily-order-id-group">
+                <span class="daily-folio-badge">{{ order.folio }}</span>
+                <span class="daily-time-badge">🕒 {{ formatOrderTime(order.created_at) }}</span>
+                <span
+                  :class="[
+                    'daily-status-badge',
+                    isOrderCompleted(order.status) ? 'status-done' : 'status-pending',
+                  ]"
+                >
+                  {{ isOrderCompleted(order.status) ? '✅ Completado' : '⏳ Pendiente' }}
+                </span>
+              </div>
+
+              <div class="daily-order-fee-box">
+                <span class="fee-lbl">Tarifa de envío:</span>
+                <strong class="fee-val">${{ Number(order.delivery_fee || 0).toFixed(2) }} MXN</strong>
+                <small class="fee-km">({{ Number(order.distance_km || 0).toFixed(1) }} km)</small>
+              </div>
+            </div>
+
+            <div class="daily-order-body">
+              <div class="daily-info-col">
+                <div class="daily-info-row">
+                  <span class="info-icon">👤</span>
+                  <div>
+                    <strong>{{ order.customer_name || 'Cliente sin nombre especificado' }}</strong>
+                    <span v-if="order.customer_phone" class="info-phone">
+                      · 📞 {{ order.customer_phone }}
+                    </span>
+                  </div>
+                </div>
+
+                <div class="daily-info-row">
+                  <span class="info-icon">📍</span>
+                  <div>
+                    <strong>{{ order.street }}</strong>, Col. <strong>{{ order.neighborhood }}</strong>
+                    <p v-if="order.address_reference" class="info-ref">
+                      Ref: {{ order.address_reference }}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="daily-info-col">
+                <div class="daily-info-row">
+                  <span class="info-icon">💳</span>
+                  <div>
+                    <strong>{{ order.payment_method || 'Método de pago no especificado' }}</strong>
+                    <span
+                      v-if="order.amount_to_collect !== null && Number(order.amount_to_collect) > 0"
+                      class="collect-badge"
+                    >
+                      Cobrar ${{ Number(order.amount_to_collect).toFixed(2) }} MXN
+                    </span>
+                    <p v-if="order.needs_change && order.change_from" class="info-ref">
+                      💵 Requiere cambio de: <strong>{{ order.change_from }}</strong>
+                    </p>
+                  </div>
+                </div>
+
+                <div v-if="order.description || order.comments" class="daily-info-row">
+                  <span class="info-icon">📦</span>
+                  <div class="info-notes">
+                    <span v-if="order.description">{{ order.description }}</span>
+                    <span v-if="order.comments"> · Nota: {{ order.comments }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Botonera de acciones por pedido (Incluye Asistencia específica del pedido al 415 101 9920) -->
+            <div class="daily-order-footer">
+              <a
+                :href="buildOrderAssistanceUrl(order)"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn-order-action btn-order-assistance"
+                title="Reportar inconveniente de este pedido por WhatsApp al Administrador (415 101 9920)"
+              >
+                <span>🎧</span>
+                <span>Asistencia con este pedido</span>
+              </a>
+
+              <div class="daily-secondary-actions">
+                <router-link
+                  v-if="order.public_token"
+                  :to="`/ticket/${order.public_token}`"
+                  target="_blank"
+                  class="btn-order-action btn-order-ticket"
+                >
+                  👁️ Ver Ticket Digital
+                </router-link>
+
+                <a
+                  :href="buildOrderShareWhatsappUrl(order)"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="btn-order-action btn-order-whatsapp"
+                >
+                  📲 Reenviar por WhatsApp
+                </a>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <!-- Estado vacío -->
+        <div v-else class="card daily-empty-card">
+          <div style="font-size: 42px; margin-bottom: 10px;">🛵</div>
+          <h3>Aún no tienes pedidos registrados hoy</h3>
+          <p>
+            Los pedidos que registres durante el día desde <strong>{{ restaurant.name }}</strong> aparecerán aquí para que puedas darles seguimiento o solicitar asistencia inmediata.
+          </p>
+          <button
+            type="button"
+            class="btn-go-create-order"
+            @click="switchPortalTab('form')"
+          >
+            ➕ Registrar un pedido ahora
+          </button>
+        </div>
+      </section>
+
       <!-- Pantalla de confirmación y Ticket Digital (Fase 3.4) -->
-      <section v-if="result" class="card result-card">
+      <section v-if="result && activePortalTab === 'form'" class="card result-card">
         <div class="result-header">
           <div class="result-check-badge">✓</div>
           <div>
@@ -1614,6 +2109,14 @@ function resetOrderForm() {
 
           <button
             type="button"
+            class="action-btn btn-view-ticket"
+            @click="switchPortalTab('history')"
+          >
+            📋 Ver en Mis Pedidos de Hoy ({{ dailySummary.total_orders }})
+          </button>
+
+          <button
+            type="button"
             class="action-btn btn-reset"
             @click="resetOrderForm"
           >
@@ -1653,7 +2156,7 @@ function resetOrderForm() {
       </div>
 
       <!-- Formulario principal de pedido -->
-      <form v-if="restaurant && !result" class="card form-card" @submit.prevent="submitOrder">
+      <form v-if="restaurant && !result && activePortalTab === 'form'" class="card form-card" @submit.prevent="submitOrder">
 
         <!-- Sucursal activa identificada -->
         <div class="selected-local-banner">
@@ -2185,7 +2688,7 @@ function resetOrderForm() {
       </form>
 
       <!-- Card 2: Solicitar repartidores rápidamente -->
-      <section v-if="restaurant && !result" class="card quick-riders-card">
+      <section v-if="restaurant && !result && activePortalTab === 'form'" class="card quick-riders-card">
 
         <!-- Estado: Confirmación de Solicitud de Repartidores Enviada -->
         <div v-if="quickResult" class="quick-result-view">
@@ -2462,6 +2965,487 @@ function resetOrderForm() {
   padding: 0 28px 60px;
   width: 100%;
   box-sizing: border-box;
+}
+
+/* Selector de pestañas del portal del restaurante */
+.portal-tabs-bar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  background: #e2e8f0;
+  padding: 6px;
+  border-radius: 14px;
+  margin-bottom: 22px;
+}
+
+.portal-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: #475569;
+  font-size: 14.5px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.portal-tab-btn.active {
+  background: #ffffff;
+  color: #d71920;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.08);
+}
+
+.portal-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: #d71920;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+/* Historial Diario Individual del Restaurante */
+.daily-history-section {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.daily-notice-banner {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-left: 5px solid #d71920;
+  border-radius: 14px;
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.daily-notice-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex: 1;
+  min-width: 240px;
+}
+
+.daily-notice-icon {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.daily-notice-left strong {
+  display: block;
+  font-size: 15px;
+  color: #0f172a;
+  margin-bottom: 4px;
+}
+
+.daily-notice-left p {
+  margin: 0;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.btn-refresh-daily {
+  background: #0f172a;
+  color: #ffffff;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-refresh-daily:hover:not(:disabled) {
+  background: #1e293b;
+}
+
+.daily-kpis-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.daily-kpi-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03);
+}
+
+.daily-kpi-label {
+  font-size: 11px;
+  font-weight: 800;
+  color: #64748b;
+  letter-spacing: 0.5px;
+}
+
+.daily-kpi-value {
+  font-size: 26px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.daily-kpi-value.text-red {
+  color: #d71920;
+}
+
+.daily-kpi-value.text-emerald {
+  color: #059669;
+}
+
+.daily-kpi-sub {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.daily-filters-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 12px 16px;
+}
+
+.daily-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 240px;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+
+.daily-search-wrap input {
+  border: none;
+  background: transparent;
+  width: 100%;
+  font-size: 14px;
+  color: #0f172a;
+  outline: none;
+}
+
+.daily-status-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.daily-pill-btn {
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+  border-radius: 999px;
+  padding: 7px 13px;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.daily-pill-btn.active {
+  background: #d71920;
+  border-color: #d71920;
+  color: #ffffff;
+}
+
+.daily-orders-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.daily-order-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-left: 5px solid #f59e0b;
+  border-radius: 16px;
+  padding: 18px 20px;
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.daily-order-card.order-completed {
+  border-left-color: #10b981;
+}
+
+.daily-order-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.daily-order-id-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.daily-folio-badge {
+  background: #0f172a;
+  color: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+
+.daily-time-badge {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #475569;
+  background: #f1f5f9;
+  padding: 4px 9px;
+  border-radius: 8px;
+}
+
+.daily-status-badge {
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.daily-status-badge.status-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.daily-status-badge.status-done {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.daily-order-fee-box {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.fee-lbl {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.fee-val {
+  font-size: 16px;
+  font-weight: 900;
+  color: #d71920;
+}
+
+.fee-km {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.daily-order-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+}
+
+.daily-info-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.daily-info-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13.5px;
+  color: #1e293b;
+  line-height: 1.45;
+}
+
+.info-icon {
+  flex-shrink: 0;
+}
+
+.info-phone {
+  color: #475569;
+  font-weight: 600;
+}
+
+.info-ref {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: #64748b;
+}
+
+.collect-badge {
+  display: inline-block;
+  margin-left: 6px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #065f46;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.info-notes {
+  font-size: 12.5px;
+  color: #475569;
+}
+
+.daily-order-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.daily-secondary-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn-order-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-order-assistance {
+  background: #0f172a;
+  color: #ffffff;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.15);
+}
+
+.btn-order-assistance:hover {
+  background: #d71920;
+  transform: translateY(-1px);
+}
+
+.btn-order-ticket {
+  background: #f1f5f9;
+  color: #1e293b;
+  border: 1px solid #cbd5e1;
+}
+
+.btn-order-ticket:hover {
+  background: #e2e8f0;
+}
+
+.btn-order-whatsapp {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.btn-order-whatsapp:hover {
+  background: #bbf7d0;
+}
+
+.daily-empty-card {
+  text-align: center;
+  padding: 42px 24px;
+}
+
+.daily-empty-card h3 {
+  margin: 0 0 8px;
+  font-size: 20px;
+  color: #0f172a;
+}
+
+.daily-empty-card p {
+  margin: 0 auto 20px;
+  max-width: 460px;
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.btn-go-create-order {
+  background: #d71920;
+  color: #ffffff;
+  border: none;
+  border-radius: 10px;
+  padding: 12px 20px;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+@media (max-width: 768px) {
+  .portal-tabs-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .daily-kpis-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .daily-order-body {
+    grid-template-columns: 1fr;
+  }
+
+  .daily-order-footer,
+  .daily-secondary-actions {
+    width: 100%;
+  }
+
+  .btn-order-assistance,
+  .daily-secondary-actions .btn-order-action {
+    flex: 1;
+    width: 100%;
+  }
 }
 
 .intro-section {
