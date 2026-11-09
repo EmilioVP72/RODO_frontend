@@ -11,6 +11,33 @@ const error = ref('')
 const errorCode = ref(null)
 const riderRequest = ref(null)
 const copySuccess = ref(false)
+const completing = ref(false)
+const completeError = ref('')
+
+const isCompleted = computed(() => {
+  const s = riderRequest.value?.status
+  return s === 'completed' || s === 'delivered'
+})
+
+async function markAsCompleted() {
+  if (!token.value || completing.value || isCompleted.value) return
+  completing.value = true
+  completeError.value = ''
+  try {
+    const response = await api.post(`/rider-requests/${token.value}/complete`)
+    const updated = response.data?.data || response.data
+    if (updated && typeof updated === 'object' && updated.folio) {
+      riderRequest.value = updated
+    } else if (riderRequest.value) {
+      riderRequest.value.status = 'completed'
+    }
+  } catch (err) {
+    completeError.value =
+      err.response?.data?.message || 'No se pudo actualizar el estado de la solicitud. Intenta de nuevo.'
+  } finally {
+    completing.value = false
+  }
+}
 
 async function fetchRiderRequest() {
   if (!token.value) {
@@ -218,14 +245,25 @@ onMounted(() => {
           </button>
 
           <button
-            class="action-btn btn-refresh-status"
+            v-if="!isCompleted"
+            class="action-btn btn-complete-req"
             type="button"
-            @click="fetchRiderRequest"
+            :disabled="completing"
+            @click="markAsCompleted"
           >
-            <span>🔄</span>
-            <span>Actualizar estado</span>
+            <span>{{ completing ? '⏳' : '✅' }}</span>
+            <span>{{ completing ? 'Actualizando estado...' : 'Marcar como Completado' }}</span>
           </button>
+
+          <div v-else class="action-btn btn-completed-done">
+            <span>✓</span>
+            <span>Solicitud Completada</span>
+          </div>
         </footer>
+
+        <p v-if="completeError" class="complete-req-error">
+          {{ completeError }}
+        </p>
 
         <div class="req-footer-notice">
           <p>© {{ new Date().getFullYear() }} RODO Moto Mandados · Coordinación en tiempo real para repartidores</p>
@@ -601,15 +639,38 @@ onMounted(() => {
   background: #1e293b;
 }
 
-.btn-refresh-status {
-  background: #ffffff;
-  color: #0f172a;
-  border: 1.5px solid #cbd5e1;
+.btn-complete-req {
+  background: #16a34a;
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(22, 163, 74, 0.28);
 }
 
-.btn-refresh-status:hover {
-  background: #f8fafc;
-  border-color: #94a3b8;
+.btn-complete-req:hover:not(:disabled) {
+  background: #15803d;
+}
+
+.btn-complete-req:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.btn-completed-done {
+  background: #dcfce7;
+  color: #166534;
+  border: 1.5px solid #86efac;
+  cursor: default;
+}
+
+.complete-req-error {
+  margin: -10px 28px 16px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
 }
 
 .req-footer-notice {

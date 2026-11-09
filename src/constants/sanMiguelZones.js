@@ -442,3 +442,4 @@ export const SAN_MIGUEL_ZONES = [
   '437. Xotolar - Ranchería',
   '438. Zirándaro - Fraccionamiento',
 ]
+

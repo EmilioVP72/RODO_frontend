@@ -8,11 +8,16 @@ const router = useRouter()
 
 // Navegación principal del Dashboard
 const activeSection = ref('resumen') // 'resumen' | 'restaurantes'
-const summaryTab = ref('charts') // 'charts' | 'orders'
+const summaryTab = ref('charts') // 'charts' | 'orders' | 'rider_requests'
 
 // Paginación para adaptar al monitor sin scrollbars
 const ordersPage = ref(1)
 const ORDERS_PER_PAGE = 7
+
+const riderRequestsPage = ref(1)
+const RIDER_REQUESTS_PER_PAGE = 6
+const riderRequestsStatusFilter = ref('all') // 'all' | 'pending' | 'completed'
+const riderRequestsSearch = ref('')
 
 const restaurantsPage = ref(1)
 const RESTAURANTS_PER_PAGE = 6
@@ -69,6 +74,8 @@ const summaryData = reactive({
     restaurants_with_complete_profile: 0,
     total_rider_requests: 0,
     total_riders_requested: 0,
+    rider_requests_completed_count: 0,
+    rider_requests_pending_count: 0,
   },
   charts: {
     daily_trend: [],
@@ -79,10 +86,13 @@ const summaryData = reactive({
     distance_ranges: [],
   },
   recent_orders: [],
+  recent_rider_requests: [],
   restaurants_list: [],
 })
 
 const completingOrderId = ref(null)
+const completingRiderRequestId = ref(null)
+const deletingRiderRequestId = ref(null)
 let summaryPollTimer = null
 
 function isOrderCompleted(status) {
@@ -124,11 +134,18 @@ async function fetchSummary(silent = false) {
     Object.assign(summaryData.kpis, data.kpis || {})
     Object.assign(summaryData.charts, data.charts || {})
     summaryData.recent_orders = data.recent_orders || []
+    summaryData.recent_rider_requests = data.recent_rider_requests || []
     summaryData.restaurants_list = data.restaurants_list || []
     if (!silent) {
       ordersPage.value = 1
-    } else if (ordersPage.value > totalOrdersPages.value) {
-      ordersPage.value = totalOrdersPages.value
+      riderRequestsPage.value = 1
+    } else {
+      if (ordersPage.value > totalOrdersPages.value) {
+        ordersPage.value = totalOrdersPages.value
+      }
+      if (riderRequestsPage.value > totalRiderRequestsPages.value) {
+        riderRequestsPage.value = totalRiderRequestsPages.value
+      }
     }
   } catch (err) {
     console.error('Error al cargar el resumen de admin:', err)
@@ -161,6 +178,59 @@ async function completeOrderFromAdmin(order) {
   }
 }
 
+async function completeRiderRequestFromAdmin(reqItem) {
+  if (!reqItem || completingRiderRequestId.value) return
+  completingRiderRequestId.value = reqItem.id
+  try {
+    if (reqItem.public_token) {
+      await api.post(`/rider-requests/${reqItem.public_token}/complete`)
+    } else {
+      await api.patch(`/admin/rider-requests/${reqItem.id}/status`, { status: 'completed' })
+    }
+    reqItem.status = 'completed'
+    showToast(`Solicitud ${reqItem.folio} marcada como Completada.`)
+    await fetchSummary(true)
+  } catch {
+    showToast('No se pudo actualizar el estado de la solicitud de repartidores.', 'error')
+  } finally {
+    completingRiderRequestId.value = null
+  }
+}
+
+async function toggleRiderRequestStatusFromAdmin(reqItem, newStatus) {
+  if (!reqItem || completingRiderRequestId.value) return
+  completingRiderRequestId.value = reqItem.id
+  try {
+    await api.patch(`/admin/rider-requests/${reqItem.id}/status`, { status: newStatus })
+    reqItem.status = newStatus
+    showToast(
+      `Solicitud ${reqItem.folio} actualizada a ${newStatus === 'completed' ? 'Completada' : 'Pendiente'}.`
+    )
+    await fetchSummary(true)
+  } catch {
+    showToast('No se pudo cambiar el estado de la solicitud.', 'error')
+  } finally {
+    completingRiderRequestId.value = null
+  }
+}
+
+async function deleteRiderRequestFromAdmin(reqItem) {
+  if (!reqItem || deletingRiderRequestId.value) return
+  deletingRiderRequestId.value = reqItem.id
+  try {
+    await api.delete(`/admin/rider-requests/${reqItem.id}`)
+    summaryData.recent_rider_requests = summaryData.recent_rider_requests.filter(
+      (item) => item.id !== reqItem.id
+    )
+    showToast(`Solicitud ${reqItem.folio} eliminada.`)
+    await fetchSummary(true)
+  } catch {
+    showToast('No se pudo eliminar la solicitud de repartidores.', 'error')
+  } finally {
+    deletingRiderRequestId.value = null
+  }
+}
+
 function selectPeriod(periodKey) {
   filters.period = periodKey
   if (periodKey !== 'custom') {
@@ -172,7 +242,7 @@ function switchToSection(section, subTab = null) {
   activeSection.value = section
   if (subTab) {
     summaryTab.value = subTab
-    if (subTab === 'orders') {
+    if (subTab === 'orders' || subTab === 'rider_requests') {
       fetchSummary(true)
     }
   }
@@ -188,6 +258,44 @@ const paginatedRecentOrders = computed(() => {
   const list = summaryData.recent_orders || []
   const start = (ordersPage.value - 1) * ORDERS_PER_PAGE
   return list.slice(start, start + ORDERS_PER_PAGE)
+})
+
+// Filtrado y paginación de Peticiones de Repartidores (Módulo secundario)
+const filteredRiderRequests = computed(() => {
+  const list = summaryData.recent_rider_requests || []
+  const q = riderRequestsSearch.value.trim().toLowerCase()
+  return list.filter((reqItem) => {
+    if (riderRequestsStatusFilter.value === 'completed' && !isOrderCompleted(reqItem.status)) {
+      return false
+    }
+    if (riderRequestsStatusFilter.value === 'pending' && isOrderCompleted(reqItem.status)) {
+      return false
+    }
+    if (!q) return true
+    const zonesText = Array.isArray(reqItem.zones) ? reqItem.zones.join(' ') : ''
+    const haystack = [
+      reqItem.folio,
+      reqItem.restaurant?.name,
+      reqItem.restaurant?.code,
+      reqItem.note,
+      zonesText,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+    return haystack.includes(q)
+  })
+})
+
+const totalRiderRequestsPages = computed(() => {
+  const total = filteredRiderRequests.value.length
+  return Math.max(1, Math.ceil(total / RIDER_REQUESTS_PER_PAGE))
+})
+
+const paginatedRiderRequests = computed(() => {
+  const list = filteredRiderRequests.value
+  const start = (riderRequestsPage.value - 1) * RIDER_REQUESTS_PER_PAGE
+  return list.slice(start, start + RIDER_REQUESTS_PER_PAGE)
 })
 
 // Cálculos para las gráficas interactivas
@@ -822,6 +930,19 @@ onUnmounted(() => {
 
           <button
             type="button"
+            :class="['nav-item', { active: activeSection === 'resumen' && summaryTab === 'rider_requests' }]"
+            @click="switchToSection('resumen', 'rider_requests')"
+          >
+            <span class="nav-icon">⚡</span>
+            <div class="nav-text">
+              <strong>Peticiones Repas</strong>
+              <small>Módulo secundario</small>
+            </div>
+            <span class="nav-counter">{{ summaryData.recent_rider_requests.length }}</span>
+          </button>
+
+          <button
+            type="button"
             :class="['nav-item', { active: activeSection === 'restaurantes' }]"
             @click="switchToSection('restaurantes')"
           >
@@ -922,11 +1043,16 @@ onUnmounted(() => {
       <header class="admin-topbar">
         <div class="topbar-title-group">
           <h2 v-if="activeSection === 'resumen'">
-            {{ summaryTab === 'charts' ? 'Resumen General de la Plataforma' : 'Últimos Pedidos Registrados' }}
+            <template v-if="summaryTab === 'charts'">Resumen General de la Plataforma</template>
+            <template v-else-if="summaryTab === 'orders'">Últimos Pedidos Registrados</template>
+            <template v-else>CRUD de Peticiones de Repartidores (Módulo Secundario)</template>
           </h2>
           <h2 v-else>Directorio y CRUD de Restaurantes</h2>
           <span class="topbar-subtitle-inline">
-            <template v-if="activeSection === 'resumen'">
+            <template v-if="activeSection === 'resumen' && summaryTab === 'rider_requests'">
+              Registro en tiempo real de solicitudes rápidas de repartidores, colonias destino y estado
+            </template>
+            <template v-else-if="activeSection === 'resumen'">
               Monitoreo en tiempo real de entregas, tarifas y zonas
             </template>
             <template v-else>
@@ -951,6 +1077,13 @@ onUnmounted(() => {
               @click="switchToSection('resumen', 'orders')"
             >
               🧾 Pedidos ({{ summaryData.recent_orders.length }})
+            </button>
+            <button
+              type="button"
+              :class="['mode-pill', { active: summaryTab === 'rider_requests' }]"
+              @click="switchToSection('resumen', 'rider_requests')"
+            >
+              ⚡ Peticiones Repas ({{ summaryData.recent_rider_requests.length }})
             </button>
           </div>
 
@@ -1134,15 +1267,20 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div class="kpi-card kpi-slate">
+          <div
+            class="kpi-card kpi-slate"
+            style="cursor: pointer;"
+            title="Clic para abrir el CRUD de Peticiones de Repartidores"
+            @click="switchToSection('resumen', 'rider_requests')"
+          >
             <div class="kpi-top">
               <span class="kpi-icon">⚡</span>
-              <span class="kpi-badge-neutral">Apoyo líder</span>
+              <span class="kpi-badge-neutral">Módulo secundario</span>
             </div>
             <div class="kpi-value">{{ summaryData.kpis.total_riders_requested }}</div>
-            <div class="kpi-title">Motos Solicitadas</div>
+            <div class="kpi-title">Motos Solicitadas ({{ summaryData.kpis.total_rider_requests }} pet.)</div>
             <div class="kpi-sub">
-              En <strong>{{ summaryData.kpis.total_rider_requests }}</strong> alertas rápidas
+              ✅ {{ summaryData.kpis.rider_requests_completed_count || 0 }} completadas · ⏳ {{ summaryData.kpis.rider_requests_pending_count || 0 }} pendientes
             </div>
           </div>
         </div>
@@ -1404,7 +1542,7 @@ onUnmounted(() => {
         </div>
 
         <!-- SUB-VISTA B: TABLA PAGINADA DE ÚLTIMOS PEDIDOS (SIN SCROLL EN MONITOR) -->
-        <div v-else class="orders-workspace-card">
+        <div v-else-if="summaryTab === 'orders'" class="orders-workspace-card">
           <div class="table-header-row">
             <div>
               <h3>🧾 Historial Reciente de Entregas</h3>
@@ -1595,6 +1733,261 @@ onUnmounted(() => {
 
           <div v-if="!summaryData.recent_orders.length" class="empty-chart">
             No hay pedidos registrados para los filtros seleccionados.
+          </div>
+        </div>
+
+        <!-- SUB-VISTA C: CRUD DE PETICIONES DE REPARTIDORES (MÓDULO SECUNDARIO) -->
+        <div v-else class="orders-workspace-card">
+          <div class="table-header-row">
+            <div>
+              <h3>⚡ Peticiones de Repartidores (Módulo Secundario)</h3>
+              <p>Registro en tiempo real de solicitudes rápidas de repartidores, colonias destino y estado del ticket</p>
+            </div>
+            <div class="table-header-controls">
+              <div class="rider-req-search-inline">
+                <span>🔍</span>
+                <input
+                  v-model="riderRequestsSearch"
+                  type="text"
+                  placeholder="Buscar folio, local o colonia..."
+                  @input="riderRequestsPage = 1"
+                />
+              </div>
+
+              <div class="status-quick-pills">
+                <button
+                  type="button"
+                  :class="['pill-btn', { active: riderRequestsStatusFilter === 'all' }]"
+                  @click="riderRequestsStatusFilter = 'all'; riderRequestsPage = 1"
+                >
+                  Todas ({{ summaryData.recent_rider_requests.length }})
+                </button>
+                <button
+                  type="button"
+                  :class="['pill-btn', { active: riderRequestsStatusFilter === 'pending' }]"
+                  @click="riderRequestsStatusFilter = 'pending'; riderRequestsPage = 1"
+                >
+                  ⏳ Pendientes ({{ summaryData.kpis.rider_requests_pending_count || 0 }})
+                </button>
+                <button
+                  type="button"
+                  :class="['pill-btn', { active: riderRequestsStatusFilter === 'completed' }]"
+                  @click="riderRequestsStatusFilter = 'completed'; riderRequestsPage = 1"
+                >
+                  ✅ Completadas ({{ summaryData.kpis.rider_requests_completed_count || 0 }})
+                </button>
+              </div>
+
+              <div v-if="totalRiderRequestsPages > 1" class="pagination-controls">
+                <button
+                  type="button"
+                  class="page-btn"
+                  :disabled="riderRequestsPage <= 1"
+                  @click="riderRequestsPage--"
+                >
+                  ◀ Anterior
+                </button>
+                <span class="page-indicator">Página {{ riderRequestsPage }} de {{ totalRiderRequestsPages }}</span>
+                <button
+                  type="button"
+                  class="page-btn"
+                  :disabled="riderRequestsPage >= totalRiderRequestsPages"
+                  @click="riderRequestsPage++"
+                >
+                  Siguiente ▶
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Vista Tabla para Monitor/Tablet -->
+          <div v-if="paginatedRiderRequests.length" class="table-desktop-wrap">
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Folio</th>
+                  <th>Restaurante</th>
+                  <th>Motos Solicitadas</th>
+                  <th>Colonias / Zonas por Repartidor</th>
+                  <th>Nota del Local</th>
+                  <th>Estado del Ticket</th>
+                  <th>Fecha</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="reqItem in paginatedRiderRequests" :key="reqItem.id">
+                  <td>
+                    <span class="folio-pill">{{ reqItem.folio }}</span>
+                  </td>
+                  <td>
+                    <div class="table-rest-cell">
+                      <strong>{{ reqItem.restaurant?.name }}</strong>
+                      <small>#{{ reqItem.restaurant?.code }}</small>
+                    </div>
+                  </td>
+                  <td>
+                    <span class="riders-count-badge">
+                      🛵 {{ reqItem.riders_count }} {{ reqItem.riders_count === 1 ? 'Repartidor' : 'Repartidores' }}
+                    </span>
+                  </td>
+                  <td>
+                    <div
+                      v-if="Array.isArray(reqItem.zones) && reqItem.zones.length"
+                      class="table-zones-list"
+                    >
+                      <span
+                        v-for="(zName, zIdx) in reqItem.zones"
+                        :key="'adm-z-' + reqItem.id + '-' + zIdx"
+                        class="table-zone-chip"
+                      >
+                        <strong>Rep {{ zIdx + 1 }}:</strong> {{ zName }}
+                      </span>
+                    </div>
+                    <span v-else class="text-muted-sm">Sin zonas registradas</span>
+                  </td>
+                  <td>
+                    <span v-if="reqItem.note" class="table-note-text">“{{ reqItem.note }}”</span>
+                    <span v-else class="text-muted-sm">Sin nota</span>
+                  </td>
+                  <td>
+                    <div class="order-status-cell">
+                      <span
+                        :class="[
+                          'order-status-pill',
+                          isOrderCompleted(reqItem.status) ? 'status-pill-completed' : 'status-pill-pending'
+                        ]"
+                      >
+                        {{ formatOrderStatus(reqItem.status) }}
+                      </span>
+                    </div>
+                  </td>
+                  <td>{{ formatDateShort(reqItem.created_at) }}</td>
+                  <td>
+                    <div class="table-actions-inline">
+                      <button
+                        v-if="!isOrderCompleted(reqItem.status)"
+                        type="button"
+                        class="btn-complete-inline"
+                        :disabled="completingRiderRequestId === reqItem.id"
+                        title="Marcar solicitud como completada"
+                        @click="completeRiderRequestFromAdmin(reqItem)"
+                      >
+                        {{ completingRiderRequestId === reqItem.id ? '⏳' : '✓ Completar' }}
+                      </button>
+                      <button
+                        v-else
+                        type="button"
+                        class="btn-reopen-inline"
+                        :disabled="completingRiderRequestId === reqItem.id"
+                        title="Cambiar estado a pendiente"
+                        @click="toggleRiderRequestStatusFromAdmin(reqItem, 'pending')"
+                      >
+                        ↩ Pendiente
+                      </button>
+
+                      <router-link
+                        :to="`/solicitud/${reqItem.public_token}`"
+                        target="_blank"
+                        class="btn-table-link"
+                      >
+                        👁️ Ticket
+                      </router-link>
+
+                      <button
+                        type="button"
+                        class="btn-delete-inline"
+                        :disabled="deletingRiderRequestId === reqItem.id"
+                        title="Eliminar registro de petición"
+                        @click="deleteRiderRequestFromAdmin(reqItem)"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Tarjetas de Peticiones para Móvil -->
+          <div v-if="filteredRiderRequests.length" class="mobile-orders-list">
+            <div
+              v-for="reqItem in filteredRiderRequests"
+              :key="'mob-req-' + reqItem.id"
+              class="mobile-order-card"
+            >
+              <div class="mob-order-top">
+                <span class="folio-pill">{{ reqItem.folio }}</span>
+                <span
+                  :class="[
+                    'order-status-pill',
+                    isOrderCompleted(reqItem.status) ? 'status-pill-completed' : 'status-pill-pending'
+                  ]"
+                >
+                  {{ formatOrderStatus(reqItem.status) }}
+                </span>
+                <span class="mob-order-date">{{ formatDateShort(reqItem.created_at) }}</span>
+              </div>
+              <div class="mob-order-rest">
+                🏪 <strong>{{ reqItem.restaurant?.name }}</strong>
+                <small>(#{{ reqItem.restaurant?.code }})</small>
+                · <strong style="color: #d71920;">🛵 {{ reqItem.riders_count }} {{ reqItem.riders_count === 1 ? 'Repartidor' : 'Repartidores' }}</strong>
+              </div>
+              <div
+                v-if="Array.isArray(reqItem.zones) && reqItem.zones.length"
+                class="table-zones-list"
+                style="margin: 4px 0;"
+              >
+                <span
+                  v-for="(zName, zIdx) in reqItem.zones"
+                  :key="'mob-z-' + reqItem.id + '-' + zIdx"
+                  class="table-zone-chip"
+                >
+                  <strong>Rep {{ zIdx + 1 }}:</strong> {{ zName }}
+                </span>
+              </div>
+              <div v-if="reqItem.note" class="mob-order-dest">
+                📝 “{{ reqItem.note }}”
+              </div>
+              <div class="mob-order-bottom">
+                <div class="table-actions-inline" style="width: 100%; justify-content: flex-end;">
+                  <button
+                    v-if="!isOrderCompleted(reqItem.status)"
+                    type="button"
+                    class="btn-complete-inline"
+                    :disabled="completingRiderRequestId === reqItem.id"
+                    @click="completeRiderRequestFromAdmin(reqItem)"
+                  >
+                    {{ completingRiderRequestId === reqItem.id ? '⏳' : '✓ Completar' }}
+                  </button>
+                  <button
+                    v-else
+                    type="button"
+                    class="btn-reopen-inline"
+                    :disabled="completingRiderRequestId === reqItem.id"
+                    @click="toggleRiderRequestStatusFromAdmin(reqItem, 'pending')"
+                  >
+                    ↩ Pendiente
+                  </button>
+                  <router-link :to="`/solicitud/${reqItem.public_token}`" target="_blank" class="btn-table-link">
+                    👁️ Ticket
+                  </router-link>
+                  <button
+                    type="button"
+                    class="btn-delete-inline"
+                    :disabled="deletingRiderRequestId === reqItem.id"
+                    @click="deleteRiderRequestFromAdmin(reqItem)"
+                  >
+                    🗑️
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="!filteredRiderRequests.length" class="empty-chart">
+            No hay peticiones de repartidores registradas para los filtros seleccionados.
           </div>
         </div>
       </section>
@@ -1813,6 +2206,14 @@ onUnmounted(() => {
       >
         <span class="mob-nav-icon">🧾</span>
         <span>Pedidos</span>
+      </button>
+      <button
+        type="button"
+        :class="['mob-nav-btn', { active: activeSection === 'resumen' && summaryTab === 'rider_requests' }]"
+        @click="switchToSection('resumen', 'rider_requests')"
+      >
+        <span class="mob-nav-icon">⚡</span>
+        <span>Repas ({{ summaryData.recent_rider_requests.length }})</span>
       </button>
       <button
         type="button"
@@ -4689,5 +5090,106 @@ onUnmounted(() => {
     border-radius: 18px 18px 0 0;
     max-height: 90dvh;
   }
+}
+
+/* Estilos para el CRUD de Peticiones de Repartidores (Módulo Secundario) */
+.rider-req-search-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 4px 10px;
+}
+
+.rider-req-search-inline input {
+  border: none;
+  background: transparent;
+  font-size: 0.78rem;
+  color: #0f172a;
+  width: 190px;
+  outline: none;
+}
+
+.riders-count-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #fff1f2;
+  color: #be123c;
+  border: 1px solid #fecdd3;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.table-zones-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 340px;
+}
+
+.table-zone-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  color: #1e293b;
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 6px;
+  line-height: 1.3;
+}
+
+.table-zone-chip strong {
+  color: #d71920;
+}
+
+.table-note-text {
+  font-size: 0.76rem;
+  font-style: italic;
+  color: #334155;
+}
+
+.text-muted-sm {
+  font-size: 0.74rem;
+  color: #94a3b8;
+}
+
+.btn-reopen-inline {
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  padding: 5px 9px;
+  font-size: 0.73rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-reopen-inline:hover:not(:disabled) {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.btn-delete-inline {
+  background: #fff1f2;
+  color: #be123c;
+  border: 1px solid #fecdd3;
+  border-radius: 7px;
+  padding: 5px 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-delete-inline:hover:not(:disabled) {
+  background: #ffe4e6;
 }
 </style>
