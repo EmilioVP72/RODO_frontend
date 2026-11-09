@@ -489,6 +489,7 @@ function handleClearMapPoints() {
 
 async function autoCalculateRouteDistance(manualTrigger = false) {
   if (!restaurant.value) return
+  if (hasFixedFee.value) return
 
   if (!hasRegisteredLocation.value) {
     if (manualTrigger) {
@@ -600,6 +601,7 @@ async function autoCalculateRouteDistance(manualTrigger = false) {
 watch(
   [() => form.street, () => form.neighborhood, () => form.map_url],
   () => {
+    if (hasFixedFee.value) return
     if (!hasRegisteredLocation.value) return
     const hasMapUrl = Boolean(form.map_url && form.map_url.trim().length > 8)
     const hasAddress = Boolean(
@@ -2120,27 +2122,29 @@ async function submitOrder() {
     return
   }
 
-  if (autoDistanceLoading.value) {
-    error.value = 'Espera unos segundos a que termine el cálculo de la ruta en el mapa.'
-    showToast(error.value, 'info')
-    return
-  }
+  if (!hasFixedFee.value) {
+    if (autoDistanceLoading.value) {
+      error.value = 'Espera unos segundos a que termine el cálculo de la ruta en el mapa.'
+      showToast(error.value, 'info')
+      return
+    }
 
-  // Si hay coordenadas de origen y destino pero aún no se ha calculado la ruta, calcularla antes de enviar
-  if (
-    mapOrigin.value &&
-    mapDestination.value &&
-    (form.distance_km === '' || form.distance_km === null || Number(form.distance_km) === 0)
-  ) {
-    await calculateInteractiveMapRoute(true)
-  }
+    // Si hay coordenadas de origen y destino pero aún no se ha calculado la ruta, calcularla antes de enviar
+    if (
+      mapOrigin.value &&
+      mapDestination.value &&
+      (form.distance_km === '' || form.distance_km === null || Number(form.distance_km) === 0)
+    ) {
+      await calculateInteractiveMapRoute(true)
+    }
 
-  // Si aún no hay distancia pero sí tiene ubicación en BD (con o sin tarifa fija), intentar calcularla antes de registrar el pedido
-  if (
-    hasRegisteredLocation.value &&
-    (form.distance_km === '' || form.distance_km === null || Number(form.distance_km) === 0)
-  ) {
-    await autoCalculateRouteDistance(false)
+    // Si aún no hay distancia pero sí tiene ubicación en BD
+    if (
+      hasRegisteredLocation.value &&
+      (form.distance_km === '' || form.distance_km === null || Number(form.distance_km) === 0)
+    ) {
+      await autoCalculateRouteDistance(false)
+    }
   }
 
   const km =
@@ -2897,100 +2901,105 @@ function resetOrderForm() {
               </label>
               <p class="distance-sub">
                 <template v-if="hasFixedFee">
-                  Tu local tiene asignada una tarifa fija de entrega en el sistema. La distancia en kilómetros se calcula para colocarla en el ticket.
+                  Tu local cuenta con una tarifa fija preferencial de entrega establecida por el Administrador.
+                </template>
+                <template v-else-if="hasRegisteredLocation">
+                  Se calcula automáticamente usando la ubicación de tu local en la base de datos y la dirección del pedido.
+                </template>
+                <template v-else>
+                  Introduce los kilómetros de la ruta real para obtener la tarifa oficial al instante.
                 </template>
               </p>
             </div>
           </div>
 
-          <!-- Estado del cálculo automático cuando el restaurante tiene ubicación en BD (con o sin tarifa fija) -->
-          <div
-            v-if="hasRegisteredLocation"
-            class="auto-distance-banner"
-            :class="{ 'is-loading': autoDistanceLoading, 'is-ok': autoDistanceSuccess }"
-          >
-            <span v-if="autoDistanceLoading" class="mini-spinner" />
-            <span v-else>{{ autoDistanceSuccess ? '🔒' : '📍' }}</span>
-            <span>
-              {{
-                autoDistanceStatus ||
-                'Al ingresar la calle y colonia (o seleccionar el destino en el mapa interactivo), calcularemos los kilómetros automáticamente.'
-              }}
-            </span>
-          </div>
-
-          <!-- Módulo de Mapa Interactivo OpenStreetMap y Resumen de Ruta por Carretera -->
-          <div class="open-map-routing-section">
-            <!-- 1. Información de la ruta en la parte de ARRIBA del mapa -->
-            <TripSummary
-              :origin-address="effectiveOriginAddressLabel"
-              :destination-address="effectiveDestinationAddressLabel"
-              :distance-km="form.distance_km !== '' && form.distance_km !== null ? Number(form.distance_km) : null"
-              :duration-minutes="routeDurationMinutes"
-              :estimated-fee="calculatedFee.status === 'ok' ? calculatedFee.fee : null"
-              :is-fixed-fee="hasFixedFee"
-              :loading="autoDistanceLoading"
-              :error="routeError"
-            />
-
-            <!-- 2. Mapa interactivo en medio -->
-            <RouteMap
-              :origin="mapOrigin"
-              :destination="mapDestination"
-              :route-geometry="routeGeometry"
-              :origin-locked="hasRegisteredLocation"
-              :loading="autoDistanceLoading"
-              @update:origin="handleOriginSelected"
-              @update:destination="handleDestinationSelected"
-              @clear="handleClearMapPoints"
-            />
-          </div>
-
-          <!-- Input de distancia (bloqueado automáticamente cuando el restaurante tiene ubicación registrada, tarifa fija o distancia calculada) -->
-          <div class="distance-input-row">
-            <div class="input-with-km">
-              <input
-                id="distance_km"
-                v-model.number="form.distance_km"
-                type="number"
-                min="0"
-                :max="hasFixedFee ? 50 : 5"
-                step="0.1"
-                :required="!hasFixedFee"
-                :disabled="hasRegisteredLocation || hasFixedFee || autoDistanceSuccess || autoDistanceLoading"
-                :readonly="hasRegisteredLocation || hasFixedFee || autoDistanceSuccess || autoDistanceLoading"
-                :class="{ 'input-locked': hasRegisteredLocation || hasFixedFee || autoDistanceSuccess }"
-                :title="(hasRegisteredLocation || hasFixedFee || autoDistanceSuccess) ? 'Distancia calculada automáticamente. No se puede modificar.' : ''"
-                :placeholder="(hasRegisteredLocation || hasFixedFee) ? 'Se calcula automáticamente (Ej. 2.5)' : 'Ej. 2.5'"
-              >
-              <span class="km-unit-badge" :class="{ 'is-locked': hasRegisteredLocation || hasFixedFee || autoDistanceSuccess }">
-                {{ (hasRegisteredLocation || hasFixedFee || autoDistanceSuccess) ? '🔒 km' : 'km' }}
-              </span>
-            </div>
-            <button
-              type="button"
-              class="btn-calc"
-              :class="{ 'btn-calc-locked': autoDistanceSuccess }"
-              :disabled="autoDistanceLoading || autoDistanceSuccess"
-              @click="autoCalculateRouteDistance(true)"
+          <!-- Módulo de Mapa Interactivo, cálculo de ruta e input de km (SOLO SI NO TIENE TARIFA FIJA) -->
+          <template v-if="!hasFixedFee">
+            <!-- Estado del cálculo automático cuando el restaurante tiene ubicación en BD -->
+            <div
+              v-if="hasRegisteredLocation"
+              class="auto-distance-banner"
+              :class="{ 'is-loading': autoDistanceLoading, 'is-ok': autoDistanceSuccess }"
             >
+              <span v-if="autoDistanceLoading" class="mini-spinner" />
+              <span v-else>{{ autoDistanceSuccess ? '🔒' : '📍' }}</span>
               <span>
                 {{
-                  autoDistanceLoading
-                    ? 'Calculando...'
-                    : autoDistanceSuccess
-                      ? hasFixedFee
-                        ? '🔒 Km calculados'
-                        : '🔒 Tarifa bloqueada'
-                      : hasRegisteredLocation
-                        ? '🛰️ Calcular con ubicación'
-                        : hasFixedFee
-                          ? 'Actualizar km'
-                          : 'Calcular tarifa'
+                  autoDistanceStatus ||
+                  'Al ingresar la calle y colonia (o seleccionar el destino en el mapa interactivo), calcularemos los kilómetros automáticamente.'
                 }}
               </span>
-            </button>
-          </div>
+            </div>
+
+            <!-- Módulo de Mapa Interactivo OpenStreetMap y Resumen de Ruta por Carretera -->
+            <div class="open-map-routing-section">
+              <!-- 1. Información de la ruta en la parte de ARRIBA del mapa -->
+              <TripSummary
+                :origin-address="effectiveOriginAddressLabel"
+                :destination-address="effectiveDestinationAddressLabel"
+                :distance-km="form.distance_km !== '' && form.distance_km !== null ? Number(form.distance_km) : null"
+                :duration-minutes="routeDurationMinutes"
+                :estimated-fee="calculatedFee.status === 'ok' ? calculatedFee.fee : null"
+                :is-fixed-fee="hasFixedFee"
+                :loading="autoDistanceLoading"
+                :error="routeError"
+              />
+
+              <!-- 2. Mapa interactivo en medio -->
+              <RouteMap
+                :origin="mapOrigin"
+                :destination="mapDestination"
+                :route-geometry="routeGeometry"
+                :origin-locked="hasRegisteredLocation"
+                :loading="autoDistanceLoading"
+                @update:origin="handleOriginSelected"
+                @update:destination="handleDestinationSelected"
+                @clear="handleClearMapPoints"
+              />
+            </div>
+
+            <!-- Input de distancia (bloqueado automáticamente cuando el restaurante tiene ubicación registrada o distancia calculada) -->
+            <div class="distance-input-row">
+              <div class="input-with-km">
+                <input
+                  id="distance_km"
+                  v-model.number="form.distance_km"
+                  type="number"
+                  min="0"
+                  max="5"
+                  step="0.1"
+                  required
+                  :disabled="hasRegisteredLocation || autoDistanceSuccess || autoDistanceLoading"
+                  :readonly="hasRegisteredLocation || autoDistanceSuccess || autoDistanceLoading"
+                  :class="{ 'input-locked': hasRegisteredLocation || autoDistanceSuccess }"
+                  :title="(hasRegisteredLocation || autoDistanceSuccess) ? 'Distancia calculada automáticamente. No se puede modificar.' : ''"
+                  :placeholder="hasRegisteredLocation ? 'Se calcula automáticamente (Ej. 2.5)' : 'Ej. 2.5'"
+                >
+                <span class="km-unit-badge" :class="{ 'is-locked': hasRegisteredLocation || autoDistanceSuccess }">
+                  {{ (hasRegisteredLocation || autoDistanceSuccess) ? '🔒 km' : 'km' }}
+                </span>
+              </div>
+              <button
+                type="button"
+                class="btn-calc"
+                :class="{ 'btn-calc-locked': autoDistanceSuccess }"
+                :disabled="autoDistanceLoading || autoDistanceSuccess"
+                @click="autoCalculateRouteDistance(true)"
+              >
+                <span>
+                  {{
+                    autoDistanceLoading
+                      ? 'Calculando...'
+                      : autoDistanceSuccess
+                        ? '🔒 Tarifa bloqueada'
+                        : hasRegisteredLocation
+                          ? '🛰️ Calcular con ubicación'
+                          : 'Calcular tarifa'
+                  }}
+                </span>
+              </button>
+            </div>
+          </template>
 
           <!-- Resultado visual de la tarifa prominente -->
           <div
