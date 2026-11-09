@@ -5,7 +5,6 @@ import api, { initializeCsrf } from '../../services/api'
 import { appBranding, applyBrandingState, fetchAppBranding } from '../../services/branding'
 import { SAN_MIGUEL_ZONES } from '../../constants/sanMiguelZones'
 import RouteMap from '../../components/maps/RouteMap.vue'
-import LocationSearch from '../../components/maps/LocationSearch.vue'
 import TripSummary from '../../components/maps/TripSummary.vue'
 import {
   MAP_CONFIG,
@@ -536,6 +535,9 @@ watch(
       autoDistanceSuccess.value = false
       autoDistanceStatus.value = ''
       form.distance_km = ''
+      mapDestination.value = null
+      routeGeometry.value = null
+      routeDurationMinutes.value = null
       return
     }
 
@@ -2785,7 +2787,7 @@ function resetOrderForm() {
                   Tarifa Fija Establecida para {{ restaurant.name }}
                 </template>
                 <template v-else-if="hasRegisteredLocation">
-                  Distancia y Tarifa Automática (Ubicación de Sucursal Activa)
+                  Distancia y Tarifa Automática 
                 </template>
                 <template v-else>
                   Distancia por calles desde la sucursal al cliente (km) *
@@ -2794,12 +2796,6 @@ function resetOrderForm() {
               <p class="distance-sub">
                 <template v-if="hasFixedFee">
                   Tu local tiene asignada una tarifa fija de entrega en el sistema. La distancia en kilómetros se calcula para colocarla en el ticket.
-                </template>
-                <template v-else-if="hasRegisteredLocation">
-                  Se calcula automáticamente usando la ubicación de tu local en la base de datos y la dirección del pedido.
-                </template>
-                <template v-else>
-                  Introduce los kilómetros de la ruta real para obtener la tarifa oficial al instante.
                 </template>
               </p>
             </div>
@@ -2821,31 +2817,8 @@ function resetOrderForm() {
             </span>
           </div>
 
-          <!-- Módulo de Mapa Interactivo OpenStreetMap + Buscador Autocompletado + Resumen de Viaje -->
+          <!-- Módulo de Mapa Interactivo OpenStreetMap y Resumen de Ruta por Carretera -->
           <div class="open-map-routing-section">
-            <div class="map-search-grid" :class="{ 'single-search-col': hasRegisteredLocation }">
-              <LocationSearch
-                v-if="!hasRegisteredLocation"
-                v-model="originSearchQuery"
-                role="origin"
-                label="📍 Punto A · Buscar ubicación de origen (Sucursal)"
-                placeholder="Escribe calle, colonia o nombre del local..."
-                :selected-location="mapOrigin"
-                @select="handleOriginSelected"
-                @clear="() => { mapOrigin = null; routeGeometry = null; routeDurationMinutes = null }"
-              />
-
-              <LocationSearch
-                v-model="destinationSearchQuery"
-                role="destination"
-                label="🏁 Punto B · Buscador rápido de destino (Autocompletado OpenStreetMap)"
-                placeholder="Busca calle, colonia, fraccionamiento o lugar de entrega..."
-                :selected-location="mapDestination"
-                @select="handleDestinationSelected"
-                @clear="() => { mapDestination = null; routeGeometry = null; routeDurationMinutes = null }"
-              />
-            </div>
-
             <RouteMap
               :origin="mapOrigin"
               :destination="mapDestination"
