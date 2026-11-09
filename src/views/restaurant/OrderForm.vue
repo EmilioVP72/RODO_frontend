@@ -1241,10 +1241,81 @@ function clearTicketPhoto() {
 // Solicitud rápida de repartidores (Máximo 3 usos por día + Zonas por repartidor)
 const selectedRiders = ref(1)
 const selectedRiderZones = ref(['', '', '', ''])
+const riderZoneSearchQueries = ref(['', '', '', ''])
 const quickNote = ref('')
 const quickLoading = ref(false)
 const quickResult = ref(null)
 const quickCopySuccess = ref(false)
+
+function normalizeZoneSearchText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
+const normalizedSanMiguelZones = SAN_MIGUEL_ZONES.map((label) => ({
+  label,
+  normalized: normalizeZoneSearchText(label),
+}))
+
+function getFilteredZonesForRider(riderZeroIndex) {
+  const rawQuery = riderZoneSearchQueries.value[riderZeroIndex] || ''
+  const cleanQuery = normalizeZoneSearchText(rawQuery)
+  if (!cleanQuery) {
+    return SAN_MIGUEL_ZONES
+  }
+  const tokens = cleanQuery.split(/\s+/).filter(Boolean)
+  const matches = normalizedSanMiguelZones
+    .filter((entry) => tokens.every((tok) => entry.normalized.includes(tok)))
+    .map((entry) => entry.label)
+
+  const currentSelection = selectedRiderZones.value[riderZeroIndex]
+  if (currentSelection && !matches.includes(currentSelection)) {
+    return [currentSelection, ...matches]
+  }
+  return matches
+}
+
+function getZoneMatchCountForRider(riderZeroIndex) {
+  const rawQuery = riderZoneSearchQueries.value[riderZeroIndex] || ''
+  const cleanQuery = normalizeZoneSearchText(rawQuery)
+  if (!cleanQuery) {
+    return SAN_MIGUEL_ZONES.length
+  }
+  const tokens = cleanQuery.split(/\s+/).filter(Boolean)
+  return normalizedSanMiguelZones.filter((entry) =>
+    tokens.every((tok) => entry.normalized.includes(tok))
+  ).length
+}
+
+function getQuickMatchesForRider(riderZeroIndex) {
+  const rawQuery = riderZoneSearchQueries.value[riderZeroIndex] || ''
+  const cleanQuery = normalizeZoneSearchText(rawQuery)
+  if (!cleanQuery) return []
+  const tokens = cleanQuery.split(/\s+/).filter(Boolean)
+  return normalizedSanMiguelZones
+    .filter((entry) => tokens.every((tok) => entry.normalized.includes(tok)))
+    .slice(0, 6)
+    .map((entry) => entry.label)
+}
+
+function selectZoneForRider(riderZeroIndex, zoneLabel) {
+  selectedRiderZones.value[riderZeroIndex] = zoneLabel
+  riderZoneSearchQueries.value[riderZeroIndex] = ''
+}
+
+function handleZoneSearchEnter(riderZeroIndex) {
+  const matches = getQuickMatchesForRider(riderZeroIndex)
+  if (matches.length > 0) {
+    selectZoneForRider(riderZeroIndex, matches[0])
+  }
+}
+
+function clearZoneSearchForRider(riderZeroIndex) {
+  riderZoneSearchQueries.value[riderZeroIndex] = ''
+}
 
 const riderRequestsUsage = reactive({
   daily_limit: 3,
@@ -1358,6 +1429,7 @@ function resetQuickRequest() {
   quickNote.value = ''
   selectedRiders.value = 1
   selectedRiderZones.value = ['', '', '', '']
+  riderZoneSearchQueries.value = ['', '', '', '']
   quickCopySuccess.value = false
   if (quickLimitReached.value) {
     showToast('Has alcanzado el límite de 3 solicitudes rápidas por hoy.', 'info')
@@ -2950,20 +3022,89 @@ function resetOrderForm() {
                 v-for="idx in selectedRiders"
                 :key="'rider-zone-select-' + idx"
                 class="rider-zone-field"
+                :class="{ 'zone-field-selected': Boolean(selectedRiderZones[idx - 1]) }"
               >
                 <label :for="'rider_zone_' + idx" class="rider-zone-item-label">
                   <span class="rider-badge-num">🛵 Repartidor {{ idx }}</span>
-                  <span>Colonia / Localidad de entrega</span>
+                  <span
+                    v-if="selectedRiderZones[idx - 1]"
+                    class="zone-selected-chip"
+                  >
+                    ✓ Zona elegida
+                  </span>
+                  <span v-else>Colonia / Localidad de entrega</span>
                 </label>
+
+                <!-- Buscador de texto rápido para filtrar la lista desplegable -->
+                <div class="zone-search-box">
+                  <span class="zone-search-icon">🔍</span>
+                  <input
+                    :id="'rider_zone_search_' + idx"
+                    v-model="riderZoneSearchQueries[idx - 1]"
+                    type="text"
+                    class="zone-search-input"
+                    :disabled="quickLimitReached || quickLoading"
+                    :placeholder="`Buscar colonia para Repartidor ${idx} (ej. Centro, Aurora, Allende)...`"
+                    autocomplete="off"
+                    @keydown.enter.prevent="handleZoneSearchEnter(idx - 1)"
+                  >
+                  <span
+                    v-if="riderZoneSearchQueries[idx - 1]"
+                    class="zone-match-counter"
+                  >
+                    {{ getZoneMatchCountForRider(idx - 1) }}
+                  </span>
+                  <button
+                    v-if="riderZoneSearchQueries[idx - 1]"
+                    type="button"
+                    class="zone-search-clear"
+                    title="Limpiar búsqueda"
+                    @click="clearZoneSearchForRider(idx - 1)"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <!-- Sugerencias rápidas al escribir en el buscador -->
+                <div
+                  v-if="riderZoneSearchQueries[idx - 1] && getQuickMatchesForRider(idx - 1).length"
+                  class="zone-quick-suggestions"
+                >
+                  <button
+                    v-for="sug in getQuickMatchesForRider(idx - 1)"
+                    :key="'sug-' + idx + '-' + sug"
+                    type="button"
+                    class="zone-suggestion-btn"
+                    :class="{ 'is-active': selectedRiderZones[idx - 1] === sug }"
+                    @click="selectZoneForRider(idx - 1, sug)"
+                  >
+                    <span>📍 {{ sug }}</span>
+                    <span class="sug-pick-tag">Elegir</span>
+                  </button>
+                </div>
+                <div
+                  v-else-if="riderZoneSearchQueries[idx - 1] && getZoneMatchCountForRider(idx - 1) === 0"
+                  class="zone-no-matches"
+                >
+                  Sin coincidencias para “{{ riderZoneSearchQueries[idx - 1] }}”. Prueba con otro nombre.
+                </div>
+
+                <!-- Lista desplegable filtrada en tiempo real -->
                 <select
                   :id="'rider_zone_' + idx"
                   v-model="selectedRiderZones[idx - 1]"
                   class="rider-zone-select"
                   :disabled="quickLimitReached || quickLoading"
                 >
-                  <option value="">-- Selecciona la colonia o localidad para el Repartidor {{ idx }} --</option>
+                  <option value="">
+                    {{
+                      riderZoneSearchQueries[idx - 1]
+                        ? `-- Selecciona entre ${getZoneMatchCountForRider(idx - 1)} coincidencias (Repartidor ${idx}) --`
+                        : `-- Selecciona la colonia o localidad para el Repartidor ${idx} --`
+                    }}
+                  </option>
                   <option
-                    v-for="zoneItem in SAN_MIGUEL_ZONES"
+                    v-for="zoneItem in getFilteredZonesForRider(idx - 1)"
                     :key="'r' + idx + '-' + zoneItem"
                     :value="zoneItem"
                   >
@@ -4738,12 +4879,18 @@ textarea {
 
 .rider-zone-field {
   background: #ffffff;
-  border: 1px solid #e2e8f0;
+  border: 1.5px solid #e2e8f0;
   border-radius: 11px;
   padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.rider-zone-field.zone-field-selected {
+  border-color: #86efac;
+  background: #f0fdf4;
 }
 
 .rider-zone-item-label {
@@ -4757,6 +4904,19 @@ textarea {
   margin: 0;
 }
 
+.zone-selected-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #86efac;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .rider-badge-num {
   display: inline-flex;
   align-items: center;
@@ -4768,6 +4928,131 @@ textarea {
   border-radius: 999px;
   font-size: 12px;
   font-weight: 800;
+}
+
+.zone-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: #f8fafc;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 9px;
+  padding: 0 8px 0 10px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.zone-search-box:focus-within {
+  background: #ffffff;
+  border-color: #d71920;
+  box-shadow: 0 0 0 3px rgba(215, 25, 32, 0.12);
+}
+
+.zone-search-icon {
+  font-size: 13px;
+  margin-right: 6px;
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+.zone-search-input {
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 8px 4px !important;
+  font-size: 13px !important;
+  width: 100%;
+  color: #0f172a;
+}
+
+.zone-search-input:focus {
+  outline: none;
+}
+
+.zone-match-counter {
+  font-size: 11px;
+  font-weight: 800;
+  color: #475569;
+  background: #e2e8f0;
+  border-radius: 999px;
+  padding: 2px 7px;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.zone-search-clear {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 4px 6px;
+  margin-left: 2px;
+  cursor: pointer;
+  border-radius: 6px;
+  line-height: 1;
+}
+
+.zone-search-clear:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.zone-quick-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  padding: 6px;
+  max-height: 185px;
+  overflow-y: auto;
+}
+
+.zone-suggestion-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #1e293b;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.zone-suggestion-btn:hover,
+.zone-suggestion-btn.is-active {
+  background: #fff1f2;
+  border-color: #fda4af;
+  color: #be123c;
+}
+
+.sug-pick-tag {
+  font-size: 11px;
+  font-weight: 800;
+  color: #d71920;
+  background: #ffffff;
+  border: 1px solid #fecdd3;
+  padding: 2px 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.zone-no-matches {
+  font-size: 12px;
+  font-weight: 600;
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  padding: 7px 10px;
 }
 
 .rider-zone-select {
