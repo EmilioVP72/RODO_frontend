@@ -163,6 +163,84 @@ const form = reactive({
   care_other: '',
 })
 
+// Normalización de texto para búsqueda de zonas y colonias
+function normalizeZoneSearchText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
+const normalizedSanMiguelZones = SAN_MIGUEL_ZONES.map((label) => ({
+  label,
+  normalized: normalizeZoneSearchText(label),
+}))
+
+// Autocompletado en tiempo real de colonias para el formulario de pedidos (Paso 1)
+const showNeighborhoodSuggestions = ref(false)
+const activeNeighborhoodIndex = ref(-1)
+
+function parseZoneLabel(rawLabel) {
+  const withoutNum = String(rawLabel || '').replace(/^\d+\.\s*/, '').trim()
+  const parts = withoutNum.split(' - ')
+  return {
+    fullName: withoutNum,
+    name: parts[0] ? parts[0].trim() : withoutNum,
+    type: parts[1] ? parts[1].trim() : '',
+  }
+}
+
+const neighborhoodSuggestions = computed(() => {
+  const query = normalizeZoneSearchText(form.neighborhood)
+  if (!query || query.length < 1) return []
+  const tokens = query.split(/\s+/).filter(Boolean)
+  return normalizedSanMiguelZones
+    .filter((entry) => tokens.every((tok) => entry.normalized.includes(tok)))
+    .slice(0, 10)
+    .map((entry) => parseZoneLabel(entry.label))
+})
+
+function selectNeighborhoodSuggestion(item) {
+  form.neighborhood = item.name
+  showNeighborhoodSuggestions.value = false
+  activeNeighborhoodIndex.value = -1
+
+  if (hasRegisteredLocation.value) {
+    if (autoDistanceTimer) clearTimeout(autoDistanceTimer)
+    autoDistanceTimer = setTimeout(() => {
+      autoCalculateRouteDistance(false)
+    }, 250)
+  }
+}
+
+function handleNeighborhoodBlur() {
+  setTimeout(() => {
+    showNeighborhoodSuggestions.value = false
+  }, 220)
+}
+
+function handleNeighborhoodKeydown(e) {
+  if (!showNeighborhoodSuggestions.value || !neighborhoodSuggestions.value.length) return
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    activeNeighborhoodIndex.value = (activeNeighborhoodIndex.value + 1) % neighborhoodSuggestions.value.length
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    activeNeighborhoodIndex.value =
+      activeNeighborhoodIndex.value <= 0
+        ? neighborhoodSuggestions.value.length - 1
+        : activeNeighborhoodIndex.value - 1
+  } else if (e.key === 'Enter') {
+    if (activeNeighborhoodIndex.value >= 0 && activeNeighborhoodIndex.value < neighborhoodSuggestions.value.length) {
+      e.preventDefault()
+      selectNeighborhoodSuggestion(neighborhoodSuggestions.value[activeNeighborhoodIndex.value])
+    }
+  } else if (e.key === 'Escape') {
+    showNeighborhoodSuggestions.value = false
+  }
+}
+
 // Opciones de cuidado con íconos
 const careList = [
   { value: 'Mantener horizontal', label: '🍕 Mantener horizontal (pizza)' },
@@ -1495,19 +1573,6 @@ const quickLoading = ref(false)
 const quickResult = ref(null)
 const quickCopySuccess = ref(false)
 
-function normalizeZoneSearchText(value) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim()
-}
-
-const normalizedSanMiguelZones = SAN_MIGUEL_ZONES.map((label) => ({
-  label,
-  normalized: normalizeZoneSearchText(label),
-}))
-
 function getFilteredZonesForRider(riderZeroIndex) {
   const rawQuery = riderZoneSearchQueries.value[riderZeroIndex] || ''
   const cleanQuery = normalizeZoneSearchText(rawQuery)
@@ -2185,6 +2250,8 @@ function resetOrderForm() {
   form.care_other = ''
 
   clearTicketPhoto()
+  showNeighborhoodSuggestions.value = false
+  activeNeighborhoodIndex.value = -1
   mapDestination.value = null
   routeGeometry.value = null
   routeDurationMinutes.value = null
@@ -2743,16 +2810,51 @@ function resetOrderForm() {
               >
             </div>
 
-            <div class="field-group">
+            <div class="field-group neighborhood-search-wrapper" @focusout="handleNeighborhoodBlur">
               <label for="neighborhood">📍 Colonia o Fraccionamiento <span class="req">*</span></label>
-              <input
-                id="neighborhood"
-                v-model="form.neighborhood"
-                type="text"
-                maxlength="150"
-                required
-                placeholder="Ej. Centro, Aurora, Guadalupe..."
+              <div class="neighborhood-input-box">
+                <input
+                  id="neighborhood"
+                  v-model="form.neighborhood"
+                  type="text"
+                  maxlength="150"
+                  required
+                  autocomplete="off"
+                  placeholder="Ej. Centro, Aurora, Guadalupe..."
+                  @focus="showNeighborhoodSuggestions = true"
+                  @input="showNeighborhoodSuggestions = true"
+                  @keydown="handleNeighborhoodKeydown"
+                >
+                <span
+                  v-if="form.neighborhood"
+                  class="btn-clear-neighborhood"
+                  title="Limpiar colonia"
+                  @mousedown.prevent="() => { form.neighborhood = ''; showNeighborhoodSuggestions = false }"
+                >✕</span>
+              </div>
+
+              <!-- Lista desplegable en tiempo real de sugerencias de colonias -->
+              <div
+                v-if="showNeighborhoodSuggestions && neighborhoodSuggestions.length > 0"
+                class="neighborhood-dropdown"
               >
+                <div class="neighborhood-dropdown-header">
+                  <span>📍 Colonias sugeridas de San Miguel de Allende ({{ neighborhoodSuggestions.length }})</span>
+                </div>
+                <ul class="neighborhood-list">
+                  <li
+                    v-for="(item, idx) in neighborhoodSuggestions"
+                    :key="item.fullName"
+                    class="neighborhood-item"
+                    :class="{ 'is-active': idx === activeNeighborhoodIndex }"
+                    @mousedown.prevent="selectNeighborhoodSuggestion(item)"
+                  >
+                    <span class="neighborhood-pin">📍</span>
+                    <span class="neighborhood-name">{{ item.name }}</span>
+                    <span v-if="item.type" class="neighborhood-type-badge">{{ item.type }}</span>
+                  </li>
+                </ul>
+              </div>
             </div>
 
             <div class="field-group">
@@ -5935,5 +6037,109 @@ textarea {
 
 .map-search-grid.single-search-col {
   grid-template-columns: 1fr;
+}
+
+/* Buscador en tiempo real de Colonias en el formulario */
+.neighborhood-search-wrapper {
+  position: relative;
+}
+
+.neighborhood-input-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.neighborhood-input-box input {
+  width: 100%;
+  padding-right: 32px;
+}
+
+.btn-clear-neighborhood {
+  position: absolute;
+  right: 10px;
+  cursor: pointer;
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #f1f5f9;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.btn-clear-neighborhood:hover {
+  color: #ef4444;
+  background: #fee2e2;
+}
+
+.neighborhood-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #ffffff;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  z-index: 1050;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.neighborhood-dropdown-header {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  background: #f8fafc;
+  border-bottom: 1px solid #f1f5f9;
+  border-top-left-radius: 10px;
+  border-top-right-radius: 10px;
+}
+
+.neighborhood-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+
+.neighborhood-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  font-size: 13.5px;
+}
+
+.neighborhood-item:hover,
+.neighborhood-item.is-active {
+  background: #f1f5f9;
+}
+
+.neighborhood-pin {
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.neighborhood-name {
+  font-weight: 700;
+  color: #1e293b;
+  flex: 1;
+}
+
+.neighborhood-type-badge {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: #e2e8f0;
+  color: #475569;
 }
 </style>
