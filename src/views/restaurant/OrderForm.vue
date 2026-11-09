@@ -4,6 +4,14 @@ import { useRouter } from 'vue-router'
 import api, { initializeCsrf } from '../../services/api'
 import { appBranding, applyBrandingState, fetchAppBranding } from '../../services/branding'
 import { SAN_MIGUEL_ZONES } from '../../constants/sanMiguelZones'
+import RouteMap from '../../components/maps/RouteMap.vue'
+import LocationSearch from '../../components/maps/LocationSearch.vue'
+import TripSummary from '../../components/maps/TripSummary.vue'
+import {
+  MAP_CONFIG,
+  calculateRouteFromBackend,
+  reverseGeocodeCoordinates,
+} from '../../services/geocoding'
 
 const router = useRouter()
 
@@ -180,11 +188,203 @@ const hasRegisteredLocation = computed(() => {
   return Boolean(restaurant.value?.location_url && String(restaurant.value.location_url).trim())
 })
 
-// Estado del cálculo automático de distancia desde la ubicación del local
+// Estado del cálculo automático de distancia desde la ubicación del local y Mapa Interactivo Open Source
 const autoDistanceLoading = ref(false)
 const autoDistanceStatus = ref('')
 const autoDistanceSuccess = ref(false)
 let autoDistanceTimer = null
+
+const mapOrigin = ref({
+  lat: MAP_CONFIG.defaultCenter.lat,
+  lng: MAP_CONFIG.defaultCenter.lng,
+  label: 'Establecimiento (Punto A)',
+})
+const mapDestination = ref(null)
+const routeGeometry = ref(null)
+const routeDurationMinutes = ref(null)
+const routeError = ref('')
+const originSearchQuery = ref('')
+const destinationSearchQuery = ref('')
+
+const effectiveOriginAddressLabel = computed(() => {
+  if (originSearchQuery.value && originSearchQuery.value.trim()) {
+    return originSearchQuery.value.trim()
+  }
+  return restaurant.value?.name
+    ? `${restaurant.value.name} (#${restaurant.value.code})`
+    : 'Ubicación del establecimiento'
+})
+
+const effectiveDestinationAddressLabel = computed(() => {
+  const manualParts = [form.street, form.neighborhood].map((s) => String(s || '').trim()).filter(Boolean)
+  if (manualParts.length > 0) {
+    return manualParts.join(', ')
+  }
+  if (destinationSearchQuery.value && destinationSearchQuery.value.trim()) {
+    return destinationSearchQuery.value.trim()
+  }
+  if (mapDestination.value && Number.isFinite(mapDestination.value.lat)) {
+    return `Coordenadas: ${Number(mapDestination.value.lat).toFixed(5)}, ${Number(mapDestination.value.lng).toFixed(5)}`
+  }
+  return ''
+})
+
+function syncRestaurantOriginToMap() {
+  if (!restaurant.value) return
+  const coords = restaurant.value.origin_coords
+  if (coords && Number.isFinite(Number(coords.lat)) && Number.isFinite(Number(coords.lng))) {
+    mapOrigin.value = {
+      lat: Number(coords.lat),
+      lng: Number(coords.lng),
+      label: restaurant.value.name || 'Establecimiento (Punto A)',
+    }
+    originSearchQuery.value = restaurant.value.name || ''
+  } else if (
+    restaurant.value.latitude !== null &&
+    restaurant.value.latitude !== undefined &&
+    restaurant.value.longitude !== null &&
+    restaurant.value.longitude !== undefined
+  ) {
+    mapOrigin.value = {
+      lat: Number(restaurant.value.latitude),
+      lng: Number(restaurant.value.longitude),
+      label: restaurant.value.name || 'Establecimiento (Punto A)',
+    }
+    originSearchQuery.value = restaurant.value.name || ''
+  }
+}
+
+async function calculateRouteBetweenMapPoints(originPt, destPt, showFeedbackToast = false) {
+  if (
+    !originPt ||
+    !destPt ||
+    !Number.isFinite(Number(originPt.lat)) ||
+    !Number.isFinite(Number(originPt.lng)) ||
+    !Number.isFinite(Number(destPt.lat)) ||
+    !Number.isFinite(Number(destPt.lng))
+  ) {
+    return
+  }
+
+  autoDistanceLoading.value = true
+  routeError.value = ''
+  autoDistanceStatus.value = '🛰️ Trazando ruta por carretera y calculando kilómetros...'
+
+  try {
+    const response = await calculateRouteFromBackend(originPt, destPt)
+    if (response?.success && response?.data) {
+      const rData = response.data
+      form.distance_km = Number(rData.distance_km)
+      routeDurationMinutes.value = rData.duration_minutes ?? null
+      routeGeometry.value = rData.geometry ?? null
+      autoDistanceSuccess.value = true
+      const minsText = rData.duration_minutes ? ` · ~${Math.max(1, Math.round(Number(rData.duration_minutes)))} min` : ''
+      autoDistanceStatus.value = `✓ Ruta calculada por carretera: ${Number(rData.distance_km).toFixed(1)} km${minsText}. (Kilómetros bloqueados).`
+      if (showFeedbackToast) {
+        showToast(`Ruta calculada: ${Number(rData.distance_km).toFixed(1)} km`, 'success')
+      }
+    }
+  } catch (err) {
+    autoDistanceSuccess.value = false
+    routeGeometry.value = null
+    routeDurationMinutes.value = null
+    const backendMsg =
+      err?.response?.data?.message ||
+      'No se encontró una ruta por carretera entre los puntos seleccionados.'
+    routeError.value = backendMsg
+    autoDistanceStatus.value = backendMsg
+    if (showFeedbackToast) {
+      showToast(backendMsg, 'error')
+    }
+  } finally {
+    autoDistanceLoading.value = false
+  }
+}
+
+function handleSelectLocationFromSearch(payload) {
+  if (!payload || !Number.isFinite(payload.lat) || !Number.isFinite(payload.lng)) return
+
+  if (payload.pointType === 'origin') {
+    mapOrigin.value = {
+      lat: payload.lat,
+      lng: payload.lng,
+      label: payload.displayName || 'Origen (Punto A)',
+    }
+    originSearchQuery.value = payload.displayName || ''
+  } else {
+    mapDestination.value = {
+      lat: payload.lat,
+      lng: payload.lng,
+      label: payload.displayName || 'Destino (Punto B)',
+    }
+    destinationSearchQuery.value = payload.displayName || ''
+    if (payload.street) {
+      form.street = payload.street
+    }
+    if (payload.neighborhood) {
+      form.neighborhood = payload.neighborhood
+    } else if (payload.title && !form.neighborhood) {
+      form.neighborhood = payload.title
+    }
+  }
+
+  if (mapOrigin.value && mapDestination.value) {
+    if (autoDistanceTimer) clearTimeout(autoDistanceTimer)
+    calculateRouteBetweenMapPoints(mapOrigin.value, mapDestination.value, true)
+  }
+}
+
+async function handleOriginMarkerChanged(coords) {
+  if (!coords) return
+  mapOrigin.value = {
+    lat: coords.lat,
+    lng: coords.lng,
+    label: 'Origen ajustado en mapa',
+  }
+  const rev = await reverseGeocodeCoordinates(coords.lat, coords.lng)
+  if (rev?.displayName) {
+    originSearchQuery.value = rev.displayName
+    mapOrigin.value.label = rev.displayName
+  }
+  if (mapDestination.value) {
+    await calculateRouteBetweenMapPoints(mapOrigin.value, mapDestination.value, false)
+  }
+}
+
+async function handleDestinationMarkerChanged(coords) {
+  if (!coords) return
+  mapDestination.value = {
+    lat: coords.lat,
+    lng: coords.lng,
+    label: 'Destino seleccionado en mapa',
+  }
+  const rev = await reverseGeocodeCoordinates(coords.lat, coords.lng)
+  if (rev) {
+    destinationSearchQuery.value = rev.displayName || ''
+    mapDestination.value.label = rev.displayName || 'Destino en mapa'
+    if (rev.street && !form.street) {
+      form.street = rev.street
+    }
+    if (rev.neighborhood && !form.neighborhood) {
+      form.neighborhood = rev.neighborhood
+    }
+  }
+  if (mapOrigin.value) {
+    if (autoDistanceTimer) clearTimeout(autoDistanceTimer)
+    await calculateRouteBetweenMapPoints(mapOrigin.value, mapDestination.value, true)
+  }
+}
+
+function handleClearMapPoints() {
+  mapDestination.value = null
+  routeGeometry.value = null
+  routeDurationMinutes.value = null
+  routeError.value = ''
+  destinationSearchQuery.value = ''
+  form.distance_km = ''
+  autoDistanceSuccess.value = false
+  autoDistanceStatus.value = ''
+}
 
 async function autoCalculateRouteDistance(manualTrigger = false) {
   if (!restaurant.value) return
@@ -228,6 +428,28 @@ async function autoCalculateRouteDistance(manualTrigger = false) {
     })
 
     const data = response.data
+    if (data.origin_coords && Number.isFinite(Number(data.origin_coords.lat))) {
+      mapOrigin.value = {
+        lat: Number(data.origin_coords.lat),
+        lng: Number(data.origin_coords.lng),
+        label: restaurant.value?.name || 'Establecimiento (Punto A)',
+      }
+    }
+    if (data.destination_coords && Number.isFinite(Number(data.destination_coords.lat))) {
+      mapDestination.value = {
+        lat: Number(data.destination_coords.lat),
+        lng: Number(data.destination_coords.lng),
+        label: effectiveDestinationAddressLabel.value || 'Destino (Punto B)',
+      }
+    }
+    if (data.geometry) {
+      routeGeometry.value = data.geometry
+    }
+    if (data.duration_minutes !== undefined && data.duration_minutes !== null) {
+      routeDurationMinutes.value = Number(data.duration_minutes)
+    }
+    routeError.value = ''
+
     if (data.has_fixed_fee && data.fixed_delivery_fee) {
       restaurant.value.fixed_delivery_fee = data.fixed_delivery_fee
       if (data.success && data.distance_km !== null && data.distance_km !== undefined) {
@@ -1773,6 +1995,7 @@ onMounted(async () => {
   }
 
   if (restaurant.value) {
+    syncRestaurantOriginToMap()
     await fetchDailyOrders(false)
   }
 
@@ -1804,6 +2027,21 @@ async function submitOrder() {
   if (!restaurant.value) {
     error.value = 'Debes iniciar sesión como restaurante.'
     return
+  }
+
+  if (autoDistanceLoading.value) {
+    error.value = 'Espera unos segundos a que termine el cálculo de la ruta en el mapa.'
+    showToast(error.value, 'info')
+    return
+  }
+
+  // Si hay coordenadas de origen y destino pero aún no se ha calculado la ruta, calcularla antes de enviar
+  if (
+    mapOrigin.value &&
+    mapDestination.value &&
+    (form.distance_km === '' || form.distance_km === null || Number(form.distance_km) === 0)
+  ) {
+    await calculateInteractiveMapRoute(true)
   }
 
   // Si aún no hay distancia pero sí tiene ubicación en BD (con o sin tarifa fija), intentar calcularla antes de registrar el pedido
@@ -1871,6 +2109,13 @@ async function submitOrder() {
       comments: form.comments ? form.comments.trim() : null,
       is_ready: form.is_ready,
       care_instructions: finalCare,
+      origin_address: effectiveOriginAddressLabel.value || null,
+      destination_address: effectiveDestinationAddressLabel.value || null,
+      origin_lat: mapOrigin.value ? Number(mapOrigin.value.lat) : null,
+      origin_lng: mapOrigin.value ? Number(mapOrigin.value.lng) : null,
+      destination_lat: mapDestination.value ? Number(mapDestination.value.lat) : null,
+      destination_lng: mapDestination.value ? Number(mapDestination.value.lng) : null,
+      duration_minutes: routeDurationMinutes.value !== null ? Number(routeDurationMinutes.value) : null,
     }
 
     const response = await api.post('/orders', payload)
@@ -1914,6 +2159,12 @@ function resetOrderForm() {
   form.care_other = ''
 
   clearTicketPhoto()
+  mapDestination.value = null
+  routeGeometry.value = null
+  routeDurationMinutes.value = null
+  routeError.value = ''
+  destinationSearchQuery.value = ''
+  syncRestaurantOriginToMap()
   autoDistanceStatus.value = ''
   autoDistanceSuccess.value = false
   result.value = null
@@ -2541,9 +2792,57 @@ function resetOrderForm() {
             <span>
               {{
                 autoDistanceStatus ||
-                'Al ingresar la calle y colonia (o enlace de mapa) del cliente, calcularemos los kilómetros automáticamente.'
+                'Al ingresar la calle y colonia (o seleccionar el destino en el mapa interactivo), calcularemos los kilómetros automáticamente.'
               }}
             </span>
+          </div>
+
+          <!-- Módulo de Mapa Interactivo OpenStreetMap + Buscador Autocompletado + Resumen de Viaje -->
+          <div class="open-map-routing-section">
+            <div class="map-search-grid" :class="{ 'single-search-col': hasRegisteredLocation }">
+              <LocationSearch
+                v-if="!hasRegisteredLocation"
+                v-model="originSearchQuery"
+                role="origin"
+                label="📍 Punto A · Buscar ubicación de origen (Sucursal)"
+                placeholder="Escribe calle, colonia o nombre del local..."
+                :selected-location="mapOrigin"
+                @select="handleOriginSelected"
+                @clear="() => { mapOrigin = null; routeGeometry = null; routeDurationMinutes = null }"
+              />
+
+              <LocationSearch
+                v-model="destinationSearchQuery"
+                role="destination"
+                label="🏁 Punto B · Buscador rápido de destino (Autocompletado OpenStreetMap)"
+                placeholder="Busca calle, colonia, fraccionamiento o lugar de entrega..."
+                :selected-location="mapDestination"
+                @select="handleDestinationSelected"
+                @clear="() => { mapDestination = null; routeGeometry = null; routeDurationMinutes = null }"
+              />
+            </div>
+
+            <RouteMap
+              :origin="mapOrigin"
+              :destination="mapDestination"
+              :route-geometry="routeGeometry"
+              :origin-locked="hasRegisteredLocation"
+              :loading="autoDistanceLoading"
+              @update:origin="handleOriginSelected"
+              @update:destination="handleDestinationSelected"
+              @clear="handleClearMapPoints"
+            />
+
+            <TripSummary
+              :origin-address="effectiveOriginAddressLabel"
+              :destination-address="effectiveDestinationAddressLabel"
+              :distance-km="form.distance_km !== '' && form.distance_km !== null ? Number(form.distance_km) : null"
+              :duration-minutes="routeDurationMinutes"
+              :estimated-fee="calculatedFee.status === 'ok' ? calculatedFee.fee : null"
+              :is-fixed-fee="hasFixedFee"
+              :loading="autoDistanceLoading"
+              :error="routeError"
+            />
           </div>
 
           <!-- Input de distancia (bloqueado automáticamente cuando el restaurante tiene ubicación registrada, tarifa fija o distancia calculada) -->
@@ -2770,10 +3069,16 @@ function resetOrderForm() {
         <button
           type="submit"
           class="btn-submit-order"
-          :disabled="loading || calculatedFee.status === 'out_of_coverage' || calculatedFee.status === 'invalid'"
+          :disabled="loading || autoDistanceLoading || calculatedFee.status === 'out_of_coverage' || calculatedFee.status === 'invalid'"
         >
-          <span v-if="loading" class="mini-spinner mr-2" />
-          {{ loading ? 'Enviando pedido...' : '🛵 Solicitar Repartidor Ahora' }}
+          <span v-if="loading || autoDistanceLoading" class="mini-spinner mr-2" />
+          {{
+            loading
+              ? 'Enviando pedido...'
+              : autoDistanceLoading
+                ? 'Calculando ruta en mapa...'
+                : '🛵 Solicitar Repartidor Ahora'
+          }}
         </button>
 
       </form>
@@ -5616,5 +5921,29 @@ textarea {
   .result-action-buttons {
     grid-template-columns: 1fr;
   }
+  .map-search-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.open-map-routing-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 14px;
+  background: #ffffff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 14px;
+}
+
+.map-search-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.map-search-grid.single-search-col {
+  grid-template-columns: 1fr;
 }
 </style>
