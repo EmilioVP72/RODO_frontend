@@ -2,6 +2,7 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api, { initializeCsrf } from '../../services/api'
+import { appBranding, applyBrandingState, fetchAppBranding } from '../../services/branding'
 
 const router = useRouter()
 
@@ -307,8 +308,131 @@ const restaurantForm = reactive({
   location_url: '',
   description: '',
   fixed_delivery_fee: '',
+  show_daily_kpis: false,
   is_active: true,
 })
+
+// Modal de Personalización del Banner e Icono/Logo de la Aplicación
+const showBrandingModal = ref(false)
+const savingBranding = ref(false)
+const brandingError = ref('')
+const logoInputMode = ref('upload') // 'upload' | 'url'
+const bannerInputMode = ref('upload') // 'upload' | 'url'
+const logoFileInputRef = ref(null)
+const bannerFileInputRef = ref(null)
+
+const brandingForm = reactive({
+  logo_image_url: '',
+  banner_image_url: '',
+})
+
+function openBrandingModal() {
+  brandingError.value = ''
+  brandingForm.logo_image_url = appBranding.logo_image_url || ''
+  brandingForm.banner_image_url = appBranding.banner_image_url || ''
+  logoInputMode.value =
+    brandingForm.logo_image_url && brandingForm.logo_image_url.startsWith('http') ? 'url' : 'upload'
+  bannerInputMode.value =
+    brandingForm.banner_image_url && brandingForm.banner_image_url.startsWith('http') ? 'url' : 'upload'
+  showBrandingModal.value = true
+}
+
+function handleLogoUpload(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    brandingError.value = 'Selecciona un archivo de imagen válido para el icono/logo.'
+    return
+  }
+
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      const MAX_SIZE = 320
+      let width = img.width
+      let height = img.height
+      if (width > height && width > MAX_SIZE) {
+        height = Math.round((height * MAX_SIZE) / width)
+        width = MAX_SIZE
+      } else if (height >= width && height > MAX_SIZE) {
+        width = Math.round((width * MAX_SIZE) / height)
+        height = MAX_SIZE
+      }
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(img, 0, 0, width, height)
+      const mime = file.type === 'image/png' ? 'image/png' : 'image/jpeg'
+      brandingForm.logo_image_url = canvas.toDataURL(mime, 0.88)
+      brandingError.value = ''
+    }
+    img.src = e.target.result
+  }
+  reader.readAsDataURL(file)
+}
+
+function handleBannerUpload(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    brandingError.value = 'Selecciona un archivo de imagen válido para el banner.'
+    return
+  }
+
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      const MAX_WIDTH = 1280
+      const MAX_HEIGHT = 420
+      let width = img.width
+      let height = img.height
+      if (width > MAX_WIDTH) {
+        height = Math.round((height * MAX_WIDTH) / width)
+        width = MAX_WIDTH
+      }
+      if (height > MAX_HEIGHT) {
+        width = Math.round((width * MAX_HEIGHT) / height)
+        height = MAX_HEIGHT
+      }
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(img, 0, 0, width, height)
+      brandingForm.banner_image_url = canvas.toDataURL('image/jpeg', 0.84)
+      brandingError.value = ''
+    }
+    img.src = e.target.result
+  }
+  reader.readAsDataURL(file)
+}
+
+async function saveBrandingSettings() {
+  brandingError.value = ''
+  savingBranding.value = true
+  try {
+    await initializeCsrf()
+    const payload = {
+      logo_image_url: brandingForm.logo_image_url ? brandingForm.logo_image_url.trim() : null,
+      banner_image_url: brandingForm.banner_image_url ? brandingForm.banner_image_url.trim() : null,
+    }
+    const response = await api.put('/admin/settings/branding', payload)
+    if (response.data?.data) {
+      applyBrandingState(response.data.data)
+    } else {
+      applyBrandingState(payload)
+    }
+    showBrandingModal.value = false
+    showToast('Banner e icono de la aplicación actualizados correctamente.')
+  } catch (err) {
+    brandingError.value = err.response?.data?.message || 'No se pudo guardar la apariencia de la aplicación.'
+  } finally {
+    savingBranding.value = false
+  }
+}
 
 // Confirmación de eliminación y modal de código recién generado
 const deleteTarget = ref(null)
@@ -405,6 +529,7 @@ function openCreateModal() {
   restaurantForm.location_url = ''
   restaurantForm.description = ''
   restaurantForm.fixed_delivery_fee = ''
+  restaurantForm.show_daily_kpis = false
   restaurantForm.is_active = true
   feeMode.value = 'dynamic'
   photoInputMode.value = 'upload'
@@ -423,6 +548,7 @@ function openEditModal(rest) {
   const hasFixed = rest.fixed_delivery_fee !== null && rest.fixed_delivery_fee !== undefined && Number(rest.fixed_delivery_fee) > 0
   restaurantForm.fixed_delivery_fee = hasFixed ? Number(rest.fixed_delivery_fee) : ''
   feeMode.value = hasFixed ? 'fixed' : 'dynamic'
+  restaurantForm.show_daily_kpis = Boolean(rest.show_daily_kpis)
   restaurantForm.is_active = Boolean(rest.is_active)
   photoInputMode.value = rest.photo_url && rest.photo_url.startsWith('http') ? 'url' : 'upload'
   showModal.value = true
@@ -504,6 +630,7 @@ async function saveRestaurant() {
       location_url: restaurantForm.location_url ? restaurantForm.location_url.trim() : null,
       description: restaurantForm.description ? restaurantForm.description.trim() : null,
       fixed_delivery_fee: resolvedFixedFee,
+      show_daily_kpis: Boolean(restaurantForm.show_daily_kpis),
       is_active: restaurantForm.is_active,
     }
 
@@ -546,6 +673,21 @@ async function toggleRestaurantStatus(rest) {
     fetchSummary()
   } catch {
     showToast('No se pudo cambiar el estado del restaurante.', 'error')
+  }
+}
+
+async function toggleRestaurantDailyKpis(rest) {
+  try {
+    const newKpiStatus = !rest.show_daily_kpis
+    await api.patch(`/admin/restaurants/${rest.id}`, {
+      show_daily_kpis: newKpiStatus,
+    })
+    rest.show_daily_kpis = newKpiStatus
+    showToast(
+      `KPIs diarios ${newKpiStatus ? 'autorizados (visibles)' : 'ocultados'} para "${rest.name}".`
+    )
+  } catch {
+    showToast('No se pudo actualizar el permiso de KPIs del restaurante.', 'error')
   }
 }
 
@@ -605,6 +747,7 @@ function handleVisibilityChange() {
 }
 
 onMounted(async () => {
+  fetchAppBranding()
   const adminToken = localStorage.getItem('rodo_admin_token') || sessionStorage.getItem('rodo_admin_token')
   if (!adminToken) {
     localStorage.setItem('rodo_admin_token', '000')
@@ -636,7 +779,15 @@ onUnmounted(() => {
     <aside class="admin-sidebar">
       <div class="sidebar-top">
         <div class="sidebar-brand">
-          <div class="brand-logo">R</div>
+          <div class="brand-logo" :class="{ 'has-custom-logo': Boolean(appBranding.logo_image_url) }">
+            <img
+              v-if="appBranding.logo_image_url"
+              :src="appBranding.logo_image_url"
+              alt="Logo RODO"
+              class="sidebar-logo-img"
+            />
+            <span v-else>R</span>
+          </div>
           <div>
             <h1>RODO Admin</h1>
             <span class="admin-badge">Código #000</span>
@@ -681,6 +832,18 @@ onUnmounted(() => {
             </div>
             <span class="nav-counter">{{ summaryData.kpis.total_restaurants }}</span>
           </button>
+
+          <button
+            type="button"
+            class="nav-item"
+            @click="openBrandingModal"
+          >
+            <span class="nav-icon">🎨</span>
+            <div class="nav-text">
+              <strong>Banner y Logo</strong>
+              <small>Imagen de app y login</small>
+            </div>
+          </button>
         </nav>
       </div>
 
@@ -699,13 +862,29 @@ onUnmounted(() => {
     <!-- ===================================================== -->
     <header class="mobile-admin-header">
       <div class="mobile-brand-left">
-        <div class="brand-logo-sm">R</div>
+        <div class="brand-logo-sm" :class="{ 'has-custom-logo': Boolean(appBranding.logo_image_url) }">
+          <img
+            v-if="appBranding.logo_image_url"
+            :src="appBranding.logo_image_url"
+            alt="Logo RODO"
+            class="sidebar-logo-img"
+          />
+          <span v-else>R</span>
+        </div>
         <div>
           <strong>RODO Admin</strong>
           <span class="mobile-code-pill">#000</span>
         </div>
       </div>
       <div class="mobile-header-actions">
+        <button
+          type="button"
+          class="btn-mobile-icon"
+          title="Personalizar Banner y Logo"
+          @click="openBrandingModal"
+        >
+          🎨
+        </button>
         <button
           v-if="activeSection === 'resumen'"
           type="button"
@@ -1552,6 +1731,14 @@ onUnmounted(() => {
                 <span :class="['field-chip', rest.description ? 'chip-ok' : 'chip-missing']">
                   {{ rest.description ? '✓ Descripción' : '○ Sin desc.' }}
                 </span>
+                <button
+                  type="button"
+                  :class="['field-chip', 'chip-kpi-toggle', rest.show_daily_kpis ? 'chip-ok' : 'chip-missing']"
+                  title="Clic para autorizar u ocultar los KPIs diarios a este restaurante"
+                  @click="toggleRestaurantDailyKpis(rest)"
+                >
+                  {{ rest.show_daily_kpis ? '📊 KPIs Hoy: Autorizados' : '🔒 KPIs Hoy: Ocultos' }}
+                </button>
               </div>
 
               <!-- Footer de tarjeta con métricas y acciones -->
@@ -1832,6 +2019,13 @@ onUnmounted(() => {
             <span>El restaurante está <strong>Activo</strong> y autorizado para generar pedidos</span>
           </label>
 
+          <label class="checkbox-row checkbox-kpi-auth">
+            <input v-model="restaurantForm.show_daily_kpis" type="checkbox" />
+            <span>
+              📊 Autorizar que este restaurante visualice los <strong>KPIs del día</strong> (<em>Pedidos de Hoy, Total Tarifas de Envío Hoy y Monto en Cobros a Clientes Hoy</em>) en su menú de repartos del día
+            </span>
+          </label>
+
           <div v-if="modalError" class="modal-error">
             {{ modalError }}
           </div>
@@ -1842,6 +2036,191 @@ onUnmounted(() => {
             </button>
             <button type="submit" class="btn-primary" :disabled="savingRestaurant">
               {{ savingRestaurant ? 'Guardando...' : '💾 Guardar Cambios' }}
+            </button>
+          </footer>
+        </form>
+      </div>
+    </div>
+
+    <!-- ===================================================== -->
+    <!-- MODAL PARA SUBIR BANNER E ICONO DE LA APLICACIÓN      -->
+    <!-- ===================================================== -->
+    <div v-if="showBrandingModal" class="modal-backdrop" @click.self="showBrandingModal = false">
+      <div class="modal-card">
+        <header class="modal-header">
+          <div>
+            <h3>🎨 Personalizar Banner e Icono de la Aplicación</h3>
+            <p>
+              Sube la imagen para el icono principal (que aparece en el Login y en el Formulario) y la imagen de fondo del Banner superior.
+            </p>
+          </div>
+          <button type="button" class="modal-close" @click="showBrandingModal = false">✕</button>
+        </header>
+
+        <form class="modal-body" @submit.prevent="saveBrandingSettings">
+          <!-- 1. Icono / Logo de la aplicación (Login y Formulario) -->
+          <div class="form-field">
+            <div class="field-label-row">
+              <label>🔳 Icono / Logo de la Aplicación (Login y Formulario)</label>
+              <div class="mini-tabs">
+                <button
+                  type="button"
+                  :class="['mini-tab', { active: logoInputMode === 'upload' }]"
+                  @click="logoInputMode = 'upload'"
+                >
+                  Subir imagen
+                </button>
+                <button
+                  type="button"
+                  :class="['mini-tab', { active: logoInputMode === 'url' }]"
+                  @click="logoInputMode = 'url'"
+                >
+                  Pegar URL
+                </button>
+              </div>
+            </div>
+
+            <div v-if="logoInputMode === 'upload'" class="upload-zone">
+              <input
+                ref="logoFileInputRef"
+                type="file"
+                accept="image/*"
+                @change="handleLogoUpload"
+              />
+              <small>Reemplaza el recuadro "R" del Login inicial y el recuadro "RODO" del encabezado de pedidos.</small>
+            </div>
+            <div v-else>
+              <input
+                v-model="brandingForm.logo_image_url"
+                type="url"
+                placeholder="https://ejemplo.com/icono-rodo.png"
+              />
+            </div>
+
+            <div v-if="brandingForm.logo_image_url" class="photo-preview-box">
+              <img :src="brandingForm.logo_image_url" alt="Vista previa del icono" />
+              <div>
+                <strong style="display: block; font-size: 0.78rem; color: #0f172a;">Icono / Logo activo</strong>
+                <button
+                  type="button"
+                  class="btn-remove-photo"
+                  style="margin-top: 4px;"
+                  @click="brandingForm.logo_image_url = ''; if (logoFileInputRef) logoFileInputRef.value = ''"
+                >
+                  🗑️ Restaurar icono original ("R" / "RODO")
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. Imagen del Banner Superior -->
+          <div class="form-field">
+            <div class="field-label-row">
+              <label>🖼️ Imagen del Banner Superior (Encabezado del Formulario)</label>
+              <div class="mini-tabs">
+                <button
+                  type="button"
+                  :class="['mini-tab', { active: bannerInputMode === 'upload' }]"
+                  @click="bannerInputMode = 'upload'"
+                >
+                  Subir imagen
+                </button>
+                <button
+                  type="button"
+                  :class="['mini-tab', { active: bannerInputMode === 'url' }]"
+                  @click="bannerInputMode = 'url'"
+                >
+                  Pegar URL
+                </button>
+              </div>
+            </div>
+
+            <div v-if="bannerInputMode === 'upload'" class="upload-zone">
+              <input
+                ref="bannerFileInputRef"
+                type="file"
+                accept="image/*"
+                @change="handleBannerUpload"
+              />
+              <small>Se colocará como imagen de fondo en la barra superior donde el restaurante llena los pedidos.</small>
+            </div>
+            <div v-else>
+              <input
+                v-model="brandingForm.banner_image_url"
+                type="url"
+                placeholder="https://ejemplo.com/banner-rodo.jpg"
+              />
+            </div>
+
+            <div v-if="brandingForm.banner_image_url" class="photo-preview-box">
+              <img :src="brandingForm.banner_image_url" alt="Vista previa del banner" style="width: 110px; height: 48px;" />
+              <div>
+                <strong style="display: block; font-size: 0.78rem; color: #0f172a;">Imagen de Banner activa</strong>
+                <button
+                  type="button"
+                  class="btn-remove-photo"
+                  style="margin-top: 4px;"
+                  @click="brandingForm.banner_image_url = ''; if (bannerFileInputRef) bannerFileInputRef.value = ''"
+                >
+                  🗑️ Restaurar color rojo original
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Vista Previa en Vivo -->
+          <div class="branding-live-preview">
+            <span class="preview-section-title">👁️ VISTA PREVIA EN VIVO</span>
+
+            <!-- Preview 1: Login -->
+            <div class="preview-login-box">
+              <div class="preview-login-logo" :class="{ 'has-img': Boolean(brandingForm.logo_image_url) }">
+                <img v-if="brandingForm.logo_image_url" :src="brandingForm.logo_image_url" alt="Logo Login" />
+                <span v-else>R</span>
+              </div>
+              <div class="preview-login-text">
+                <strong>RODO</strong>
+                <small>Moto Mandados · Portal de Restaurantes (Login)</small>
+              </div>
+            </div>
+
+            <!-- Preview 2: Banner del Formulario -->
+            <div
+              class="preview-header-banner"
+              :style="
+                brandingForm.banner_image_url
+                  ? {
+                      backgroundImage: `linear-gradient(135deg, rgba(15, 23, 42, 0.62) 0%, rgba(185, 28, 28, 0.58) 100%), url('${brandingForm.banner_image_url}')`,
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                    }
+                  : {}
+              "
+            >
+              <div class="preview-banner-left">
+                <span class="preview-back-pill">← Inicio</span>
+                <div class="preview-form-logo" :class="{ 'has-img': Boolean(brandingForm.logo_image_url) }">
+                  <img v-if="brandingForm.logo_image_url" :src="brandingForm.logo_image_url" alt="Logo Form" />
+                  <span v-else>RODO</span>
+                </div>
+                <div>
+                  <strong>RODO Moto Mandados</strong>
+                  <small>Portal privado para locales · Solicitud de repartidores</small>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="brandingError" class="modal-error">
+            {{ brandingError }}
+          </div>
+
+          <footer class="modal-footer">
+            <button type="button" class="btn-secondary" @click="showBrandingModal = false">
+              Cancelar
+            </button>
+            <button type="submit" class="btn-primary" :disabled="savingBranding">
+              {{ savingBranding ? 'Guardando...' : '💾 Guardar Banner y Logo' }}
             </button>
           </footer>
         </form>
@@ -3386,6 +3765,165 @@ onUnmounted(() => {
 .created-code-showcase small {
   font-size: 0.75rem;
   color: #64748b;
+}
+
+.sidebar-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: inherit;
+}
+
+.brand-logo.has-custom-logo,
+.brand-logo-sm.has-custom-logo {
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.chip-kpi-toggle {
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+  transition: transform 0.15s ease;
+}
+
+.chip-kpi-toggle:hover {
+  transform: translateY(-1px);
+}
+
+.checkbox-kpi-auth {
+  background: #f0f9ff;
+  border-color: #bae6fd;
+}
+
+.branding-live-preview {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.preview-section-title {
+  font-size: 0.7rem;
+  font-weight: 800;
+  color: #475569;
+  letter-spacing: 0.5px;
+}
+
+.preview-login-box {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.preview-login-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #d71920;
+  color: #ffffff;
+  font-size: 22px;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.preview-login-logo.has-img {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+}
+
+.preview-login-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.preview-login-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-login-text strong {
+  color: #d71920;
+  font-size: 0.95rem;
+  font-weight: 900;
+}
+
+.preview-login-text small {
+  color: #64748b;
+  font-size: 0.72rem;
+}
+
+.preview-header-banner {
+  background: linear-gradient(135deg, #d71920 0%, #ba1218 100%);
+  color: #ffffff;
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.preview-banner-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.preview-back-pill {
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.preview-form-logo {
+  width: 42px;
+  height: 38px;
+  border: 2px solid #ffffff;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 900;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.preview-form-logo.has-img {
+  background: #ffffff;
+}
+
+.preview-form-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.preview-banner-left strong {
+  display: block;
+  font-size: 0.85rem;
+}
+
+.preview-banner-left small {
+  display: block;
+  font-size: 0.68rem;
+  opacity: 0.9;
 }
 
 .status-pill-toggle {

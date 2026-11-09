@@ -1,7 +1,8 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import api, { initializeCsrf } from '../../services/api'
+import { appBranding, applyBrandingState, fetchAppBranding } from '../../services/branding'
 
 const router = useRouter()
 
@@ -9,6 +10,10 @@ const router = useRouter()
 const loginIdentifier = ref('')
 const loginLoading = ref(false)
 const loginError = ref('')
+
+onMounted(() => {
+  fetchAppBranding()
+})
 
 async function loginRestaurant() {
   loginError.value = ''
@@ -50,6 +55,10 @@ async function loginRestaurant() {
       sessionStorage.setItem('rodo_restaurant_code', restaurant.code)
     }
 
+    if (restaurant.branding) {
+      applyBrandingState(restaurant.branding)
+    }
+
     const payload = {
       id: restaurant.id,
       name: restaurant.name,
@@ -58,6 +67,7 @@ async function loginRestaurant() {
       location_url: restaurant.location_url || null,
       description: restaurant.description || null,
       fixed_delivery_fee: restaurant.fixed_delivery_fee ?? null,
+      show_daily_kpis: Boolean(restaurant.show_daily_kpis),
       token: restaurant.token || null,
     }
 
@@ -100,7 +110,15 @@ async function loginRestaurant() {
     <div class="register-container">
 
       <header class="brand-header">
-        <div class="brand-logo">R</div>
+        <div class="brand-logo" :class="{ 'has-custom-logo': Boolean(appBranding.logo_image_url) }">
+          <img
+            v-if="appBranding.logo_image_url"
+            :src="appBranding.logo_image_url"
+            alt="Logo RODO"
+            class="brand-logo-img"
+          />
+          <span v-else>R</span>
+        </div>
         <h1>RODO</h1>
         <p class="brand-subtitle">Moto Mandados · Portal de Restaurantes</p>
       </header>
@@ -199,8 +217,8 @@ async function loginRestaurant() {
 }
 
 .brand-logo {
-  width: 64px;
-  height: 64px;
+  width: 68px;
+  height: 68px;
   margin: 0 auto 12px;
   display: flex;
   align-items: center;
@@ -211,6 +229,19 @@ async function loginRestaurant() {
   font-size: 36px;
   font-weight: 800;
   box-shadow: 0 4px 14px rgba(215, 25, 32, 0.3);
+  overflow: hidden;
+}
+
+.brand-logo.has-custom-logo {
+  background: #ffffff;
+  border: 2px solid #e2e8f0;
+}
+
+.brand-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .brand-header h1 {

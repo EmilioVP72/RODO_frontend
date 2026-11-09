@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import api, { initializeCsrf } from '../../services/api'
+import { appBranding, applyBrandingState, fetchAppBranding } from '../../services/branding'
 
 const router = useRouter()
 
@@ -1342,6 +1343,18 @@ async function submitQuickRequest() {
   }
 }
 
+// Regla de negocio: mostrar KPIs diarios solo si el Admin lo autorizó con el checkbox
+const canViewDailyKpis = computed(() => Boolean(restaurant.value?.show_daily_kpis))
+
+const headerBannerStyle = computed(() => {
+  if (!appBranding.banner_image_url) return {}
+  return {
+    backgroundImage: `linear-gradient(135deg, rgba(15, 23, 42, 0.62) 0%, rgba(185, 28, 28, 0.58) 100%), url("${appBranding.banner_image_url}")`,
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+  }
+})
+
 // Carga inicial de datos de sesión y pedidos del día
 async function fetchDailyOrders(silent = false) {
   if (!restaurant.value) return
@@ -1363,6 +1376,12 @@ async function fetchDailyOrders(silent = false) {
 
     dailyOrders.value = list
     dailyDate.value = payload.date || new Date().toLocaleDateString('es-MX')
+
+    if (payload.show_daily_kpis !== undefined && restaurant.value) {
+      restaurant.value.show_daily_kpis = Boolean(payload.show_daily_kpis)
+    } else if (payload.restaurant?.show_daily_kpis !== undefined && restaurant.value) {
+      restaurant.value.show_daily_kpis = Boolean(payload.restaurant.show_daily_kpis)
+    }
 
     if (payload.summary) {
       Object.assign(dailySummary, payload.summary)
@@ -1550,9 +1569,13 @@ function handlePortalFocus() {
 }
 
 onMounted(async () => {
+  fetchAppBranding()
   try {
     const response = await api.get('/restaurant/me')
     restaurant.value = response.data.data
+    if (restaurant.value?.branding) {
+      applyBrandingState(restaurant.value.branding)
+    }
     if (restaurant.value?.code) {
       localStorage.setItem('rodo_restaurant_code', restaurant.value.code)
     }
@@ -1746,8 +1769,12 @@ function resetOrderForm() {
 <template>
   <div class="portal-layout">
 
-    <!-- Encabezado con identidad RODO -->
-    <header class="portal-header">
+    <!-- Encabezado con identidad RODO (soporta Banner e Icono personalizados desde Admin) -->
+    <header
+      class="portal-header"
+      :class="{ 'has-custom-banner': Boolean(appBranding.banner_image_url) }"
+      :style="headerBannerStyle"
+    >
       <div class="header-inner">
         <div class="brand-group">
           <button
@@ -1758,7 +1785,15 @@ function resetOrderForm() {
           >
             ← Inicio
           </button>
-          <div class="logo-box">RODO</div>
+          <div class="logo-box" :class="{ 'has-custom-logo': Boolean(appBranding.logo_image_url) }">
+            <img
+              v-if="appBranding.logo_image_url"
+              :src="appBranding.logo_image_url"
+              alt="Logo RODO"
+              class="portal-logo-img"
+            />
+            <span v-else>RODO</span>
+          </div>
           <div class="brand-text">
             <h1>RODO Moto Mandados</h1>
             <p>Portal privado para locales · Solicitud de repartidores</p>
@@ -1850,8 +1885,8 @@ function resetOrderForm() {
           </button>
         </div>
 
-        <!-- KPIs del día del restaurante -->
-        <div class="daily-kpis-grid">
+        <!-- KPIs del día del restaurante (Solo visibles si el Admin lo autorizó con el checkbox) -->
+        <div v-if="canViewDailyKpis" class="daily-kpis-grid">
           <div class="daily-kpi-card">
             <span class="daily-kpi-label">PEDIDOS DE HOY</span>
             <strong class="daily-kpi-value">{{ dailySummary.total_orders }}</strong>
@@ -2913,6 +2948,20 @@ function resetOrderForm() {
   font-size: 19px;
   letter-spacing: -0.5px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.logo-box.has-custom-logo {
+  background: #ffffff;
+  padding: 0;
+}
+
+.portal-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .brand-text h1 {
