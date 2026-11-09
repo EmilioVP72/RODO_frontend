@@ -310,9 +310,39 @@ const restaurantForm = reactive({
   is_active: true,
 })
 
-// Confirmación de eliminación
+// Confirmación de eliminación y modal de código recién generado
 const deleteTarget = ref(null)
 const deletingRestaurant = ref(false)
+const createdRestaurantModal = ref(null)
+
+async function copyRestaurantCode(code, name = '') {
+  if (!code) return
+  try {
+    await navigator.clipboard.writeText(String(code))
+    showToast(
+      name
+        ? `Código #${code} de "${name}" copiado al portapapeles.`
+        : `Código #${code} copiado al portapapeles.`
+    )
+  } catch {
+    showToast(`Código del local: #${code}`)
+  }
+}
+
+async function copyWelcomeCredentials(rest) {
+  if (!rest?.code) return
+  const origin =
+    typeof window !== 'undefined' && window.location.origin
+      ? window.location.origin
+      : 'https://rodo-frontend-phi.vercel.app'
+  const text = `🛵 *RODO Moto Mandados*\n🏪 *Local:* ${rest.name}\n🔑 *Código de acceso (3 dígitos):* ${rest.code}\n🌐 *Ingresar aquí:* ${origin}/registro`
+  try {
+    await navigator.clipboard.writeText(text)
+    showToast(`Datos de acceso de "${rest.name}" (#${rest.code}) copiados para compartir.`)
+  } catch {
+    showToast(`Código generado: #${rest.code}`)
+  }
+}
 
 async function fetchRestaurants() {
   restaurantsLoading.value = true
@@ -479,13 +509,18 @@ async function saveRestaurant() {
 
     if (isEditing.value && restaurantForm.id) {
       await api.put(`/admin/restaurants/${restaurantForm.id}`, payload)
-      showToast('Restaurante actualizado correctamente.')
+      showToast(`Restaurante "${cleanName}" (#${restaurantForm.code}) actualizado correctamente.`)
+      showModal.value = false
     } else {
-      await api.post('/admin/restaurants', payload)
-      showToast('Restaurante creado correctamente.')
+      const response = await api.post('/admin/restaurants', payload)
+      const created = response.data?.data || null
+      showModal.value = false
+      if (created?.code) {
+        createdRestaurantModal.value = created
+      }
+      showToast(`Restaurante creado con el código #${created?.code || ''}.`)
     }
 
-    showModal.value = false
     await Promise.all([fetchRestaurants(), fetchSummary()])
   } catch (err) {
     console.error('Error al guardar restaurante:', err)
@@ -1463,7 +1498,14 @@ onUnmounted(() => {
                 <!-- Datos principales -->
                 <div class="rest-head-info">
                   <div class="rest-badges-line">
-                    <span class="rest-code-badge">#{{ rest.code }}</span>
+                    <button
+                      type="button"
+                      class="rest-code-badge rest-code-copy-btn"
+                      :title="`Clic para copiar el código #${rest.code}`"
+                      @click="copyRestaurantCode(rest.code, rest.name)"
+                    >
+                      🔑 Código: #{{ rest.code }} 📋
+                    </button>
                     <button
                       type="button"
                       :class="['status-pill-toggle', rest.is_active ? 'active' : 'inactive']"
@@ -1617,6 +1659,27 @@ onUnmounted(() => {
         </header>
 
         <form class="modal-body" @submit.prevent="saveRestaurant">
+          <!-- Indicador de Código de Acceso de 3 dígitos -->
+          <div v-if="isEditing && restaurantForm.code" class="code-info-banner code-info-assigned">
+            <div>
+              <span class="code-info-label">🔑 CÓDIGO DE ACCESO DEL RESTAURANTE (3 DÍGITOS)</span>
+              <strong class="code-info-value">#{{ restaurantForm.code }}</strong>
+            </div>
+            <button
+              type="button"
+              class="btn-copy-code-inline"
+              @click="copyRestaurantCode(restaurantForm.code, restaurantForm.name)"
+            >
+              📋 Copiar #{{ restaurantForm.code }}
+            </button>
+          </div>
+          <div v-else class="code-info-banner code-info-auto">
+            <span>🔑</span>
+            <span>
+              Al guardar este restaurante, el sistema generará automáticamente su <strong>código único de 3 dígitos</strong> en la base de datos para que puedas entregárselo al local.
+            </span>
+          </div>
+
           <div class="form-field">
             <label>🏪 Nombre del restaurante *</label>
             <input
@@ -1782,6 +1845,55 @@ onUnmounted(() => {
             </button>
           </footer>
         </form>
+      </div>
+    </div>
+
+    <!-- MODAL DE CÓDIGO RECIÉN GENERADO PARA EL RESTAURANTE -->
+    <div v-if="createdRestaurantModal" class="modal-backdrop" @click.self="createdRestaurantModal = null">
+      <div class="modal-card modal-small">
+        <header class="modal-header">
+          <div>
+            <h3>✅ ¡Restaurante Creado con Éxito!</h3>
+            <p>Comparte este código único de 3 dígitos con el restaurante para que pueda iniciar sesión.</p>
+          </div>
+          <button type="button" class="modal-close" @click="createdRestaurantModal = null">✕</button>
+        </header>
+        <div class="modal-body" style="text-align: center;">
+          <p style="margin: 0; font-size: 0.95rem; color: #334155;">
+            Establecimiento registrado:
+            <strong style="color: #0f172a;">{{ createdRestaurantModal.name }}</strong>
+          </p>
+
+          <div class="created-code-showcase">
+            <span class="showcase-label">CÓDIGO DE ACCESO (3 DÍGITOS)</span>
+            <strong class="showcase-digits">{{ createdRestaurantModal.code }}</strong>
+            <small>Almacenado en la base de datos y visible en el directorio CRUD</small>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <button
+              type="button"
+              class="btn-primary"
+              style="width: 100%; justify-content: center;"
+              @click="copyWelcomeCredentials(createdRestaurantModal)"
+            >
+              📋 Copiar datos de acceso para enviar al local
+            </button>
+            <button
+              type="button"
+              class="btn-secondary"
+              style="width: 100%; justify-content: center;"
+              @click="copyRestaurantCode(createdRestaurantModal.code, createdRestaurantModal.name)"
+            >
+              🔑 Copiar solo código (#{{ createdRestaurantModal.code }})
+            </button>
+          </div>
+        </div>
+        <footer class="modal-footer">
+          <button type="button" class="btn-secondary" @click="createdRestaurantModal = null">
+            Cerrar
+          </button>
+        </footer>
       </div>
     </div>
 
@@ -3168,10 +3280,112 @@ onUnmounted(() => {
 .rest-code-badge {
   background: #0f172a;
   color: #fff;
-  padding: 2px 7px;
+  padding: 3px 9px;
   border-radius: 6px;
   font-weight: 800;
-  font-size: 0.7rem;
+  font-size: 0.72rem;
+  border: 1px solid #1e293b;
+}
+
+.rest-code-copy-btn {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.rest-code-copy-btn:hover {
+  background: #d71920;
+  border-color: #d71920;
+  transform: translateY(-1px);
+}
+
+.code-info-banner {
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.code-info-assigned {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.code-info-label {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: #166534;
+  letter-spacing: 0.4px;
+}
+
+.code-info-value {
+  font-size: 1.25rem;
+  font-weight: 900;
+  color: #14532d;
+  letter-spacing: 1px;
+}
+
+.btn-copy-code-inline {
+  background: #16a34a;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.btn-copy-code-inline:hover {
+  background: #15803d;
+}
+
+.code-info-auto {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e3a8a;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.created-code-showcase {
+  background: #fff1f2;
+  border: 2px dashed #f43f5e;
+  border-radius: 14px;
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.showcase-label {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #be123c;
+  letter-spacing: 0.8px;
+}
+
+.showcase-digits {
+  font-size: 2.6rem;
+  font-weight: 900;
+  color: #d71920;
+  letter-spacing: 6px;
+  line-height: 1.1;
+}
+
+.created-code-showcase small {
+  font-size: 0.75rem;
+  color: #64748b;
 }
 
 .status-pill-toggle {

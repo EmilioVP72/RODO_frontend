@@ -5,118 +5,10 @@ import api, { initializeCsrf } from '../../services/api'
 
 const router = useRouter()
 
-// Modo de pantalla: 'register' o 'login'
-const activeTab = ref('register')
-
-// Formulario de registro
-const restaurantName = ref('')
-const loading = ref(false)
-const error = ref('')
-
-// Formulario de login / ingreso
+// Formulario de login / ingreso exclusivo para cuentas autorizadas
 const loginIdentifier = ref('')
 const loginLoading = ref(false)
 const loginError = ref('')
-
-// Detectar si el error es de restaurante duplicado para ofrecer login rápido
-const isDuplicateError = ref(false)
-
-async function registerRestaurant() {
-  error.value = ''
-  isDuplicateError.value = false
-
-  const name = restaurantName.value.trim()
-
-  // Si ingresa el código maestro 000 desde aquí, redirigir al flujo de login de Admin
-  if (name === '000') {
-    loginIdentifier.value = '000'
-    activeTab.value = 'login'
-    await loginRestaurant()
-    return
-  }
-
-  if (name.length < 2) {
-    error.value = 'El nombre debe tener al menos 2 caracteres.'
-    return
-  }
-
-  if (name.length > 150) {
-    error.value = 'El nombre no puede superar los 150 caracteres.'
-    return
-  }
-
-  loading.value = true
-
-  try {
-    await initializeCsrf()
-
-    const response = await api.post('/restaurants', {
-      name,
-    })
-
-    const restaurant = response.data.data
-
-    // Guardar tokens y datos para persistencia robusta cross-domain
-    if (restaurant.token) {
-      localStorage.setItem('rodo_token', restaurant.token)
-      sessionStorage.setItem('rodo_token', restaurant.token)
-    }
-
-    if (restaurant.code) {
-      localStorage.setItem('rodo_restaurant_code', restaurant.code)
-      sessionStorage.setItem('rodo_restaurant_code', restaurant.code)
-    }
-
-    const payload = {
-      id: restaurant.id,
-      name: restaurant.name,
-      code: restaurant.code,
-      token: restaurant.token || null,
-    }
-
-    localStorage.setItem('rodo_restaurant', JSON.stringify(payload))
-    sessionStorage.setItem('rodo_registration_result', JSON.stringify(payload))
-
-    await router.push('/registro/exitoso')
-
-  } catch (err) {
-    console.error('Error al registrar restaurante:', err)
-
-    if (err.response?.status === 422) {
-      const errors = err.response.data?.errors || {}
-      const msg = Object.values(errors).flat().join(' ') || 'Ya existe un restaurante registrado con este nombre.'
-      error.value = msg
-
-      if (msg.toLowerCase().includes('ya existe')) {
-        isDuplicateError.value = true
-      }
-
-    } else if (err.response?.status === 419) {
-      error.value =
-        'La sesión de seguridad expiró. Recarga la página e inténtalo nuevamente.'
-
-    } else if (err.response?.status === 429) {
-      error.value =
-        'Demasiados intentos de registro. Espera un momento.'
-
-    } else if (err.response?.status >= 500) {
-      error.value =
-        'Ocurrió un error en el servidor. Inténtalo más tarde.'
-
-    } else if (!err.response) {
-      error.value =
-        'No se pudo conectar con el servidor de RODO.'
-
-    } else {
-      error.value =
-        err.response?.data?.message ||
-        'No fue posible registrar el restaurante.'
-    }
-
-  } finally {
-    loading.value = false
-  }
-}
 
 async function loginRestaurant() {
   loginError.value = ''
@@ -186,7 +78,13 @@ async function loginRestaurant() {
     }
 
     if (err.response?.status === 404) {
-      loginError.value = 'No se encontró un restaurante con ese nombre o código.'
+      loginError.value = 'No se encontró un restaurante registrado con ese código o nombre. Solicita tu código al administrador.'
+    } else if (err.response?.status === 419) {
+      loginError.value = 'La sesión de seguridad expiró. Recarga la página e inténtalo nuevamente.'
+    } else if (err.response?.status === 429) {
+      loginError.value = 'Demasiados intentos de acceso. Espera un momento e inténtalo de nuevo.'
+    } else if (!err.response) {
+      loginError.value = 'No se pudo conectar con el servidor de RODO.'
     } else {
       loginError.value = err.response?.data?.message || 'Error al iniciar sesión. Inténtalo nuevamente.'
     }
@@ -194,13 +92,6 @@ async function loginRestaurant() {
   } finally {
     loginLoading.value = false
   }
-}
-
-function switchToLoginWithName() {
-  loginIdentifier.value = restaurantName.value.trim()
-  activeTab.value = 'login'
-  error.value = ''
-  isDuplicateError.value = false
 }
 </script>
 
@@ -216,139 +107,68 @@ function switchToLoginWithName() {
 
       <section class="register-card">
 
-        <!-- Selector de pestañas -->
-        <div class="auth-tabs">
-          <button
-            type="button"
-            :class="['tab-btn', { active: activeTab === 'register' }]"
-            @click="activeTab = 'register'; error = ''; loginError = ''"
-          >
-            Registrar restaurante
-          </button>
-          <button
-            type="button"
-            :class="['tab-btn', { active: activeTab === 'login' }]"
-            @click="activeTab = 'login'; error = ''; loginError = ''"
-          >
-            Ya tengo cuenta
-          </button>
+        <div class="login-mode-badge">
+          <span>🔑</span>
+          <span>Ya tengo cuenta · Acceso Autorizado</span>
         </div>
 
-        <!-- FORMULARIO 1: REGISTRO -->
-        <div v-if="activeTab === 'register'">
-          <div class="card-heading">
-            <h2>Nuevo registro</h2>
-            <p>
-              Registra tu establecimiento para obtener tu código y comenzar a solicitar servicios de entrega.
-            </p>
-          </div>
-
-          <form @submit.prevent="registerRestaurant">
-            <div class="form-group">
-              <label for="restaurantName">
-                Nombre del restaurante
-              </label>
-
-              <input
-                id="restaurantName"
-                v-model="restaurantName"
-                type="text"
-                placeholder="Ej. Tacos El Buen Sabor"
-                minlength="2"
-                maxlength="150"
-                autocomplete="organization"
-                :disabled="loading"
-                required
-              />
-
-              <small>
-                Este nombre aparecerá en tus pedidos y tickets digitales.
-              </small>
-            </div>
-
-            <div
-              v-if="error"
-              class="error-message"
-              role="alert"
-            >
-              <p>{{ error }}</p>
-              <button
-                v-if="isDuplicateError"
-                type="button"
-                class="btn-switch-login"
-                @click="switchToLoginWithName"
-              >
-                ¿Es tu restaurante? Ingresar aquí →
-              </button>
-            </div>
-
-            <button
-              type="submit"
-              class="submit-button"
-              :disabled="loading || !restaurantName.trim()"
-            >
-              <span v-if="loading">
-                Registrando restaurante...
-              </span>
-              <span v-else>
-                Registrar restaurante
-              </span>
-            </button>
-          </form>
+        <div class="card-heading">
+          <h2>Ingresar al sistema</h2>
+          <p>
+            Ingresa con tu código único de 3 dígitos (ej. <strong>492</strong>) o el nombre de tu restaurante asignado por el administrador.
+          </p>
         </div>
 
-        <!-- FORMULARIO 2: LOGIN / INGRESO -->
-        <div v-else>
-          <div class="card-heading">
-            <h2>Ingresar al sistema</h2>
-            <p>
-              Ingresa con tu código único de 3 dígitos (ej. 492) o el nombre de tu restaurante registrado.
-            </p>
+        <form @submit.prevent="loginRestaurant">
+          <div class="form-group">
+            <label for="loginIdentifier">
+              Código de 3 dígitos o Nombre del local
+            </label>
+
+            <input
+              id="loginIdentifier"
+              v-model="loginIdentifier"
+              type="text"
+              placeholder="Ej. 492 o Tacos El Buen Sabor"
+              minlength="2"
+              maxlength="150"
+              autocomplete="off"
+              :disabled="loginLoading"
+              required
+            />
+
+            <small>
+              Usa el código de 3 dígitos proporcionado por la administración de RODO.
+            </small>
           </div>
 
-          <form @submit.prevent="loginRestaurant">
-            <div class="form-group">
-              <label for="loginIdentifier">
-                Código de 3 dígitos o Nombre
-              </label>
+          <div
+            v-if="loginError"
+            class="error-message"
+            role="alert"
+          >
+            {{ loginError }}
+          </div>
 
-              <input
-                id="loginIdentifier"
-                v-model="loginIdentifier"
-                type="text"
-                placeholder="Ej. 492 o Tacos El Buen Sabor"
-                minlength="2"
-                maxlength="150"
-                :disabled="loginLoading"
-                required
-              />
+          <button
+            type="submit"
+            class="submit-button"
+            :disabled="loginLoading || !loginIdentifier.trim()"
+          >
+            <span v-if="loginLoading">
+              Iniciando sesión...
+            </span>
+            <span v-else>
+              Ingresar al sistema
+            </span>
+          </button>
+        </form>
 
-              <small>
-                Usa el código de 3 dígitos asignado a tu local.
-              </small>
-            </div>
-
-            <div
-              v-if="loginError"
-              class="error-message"
-              role="alert"
-            >
-              {{ loginError }}
-            </div>
-
-            <button
-              type="submit"
-              class="submit-button"
-              :disabled="loginLoading || !loginIdentifier.trim()"
-            >
-              <span v-if="loginLoading">
-                Iniciando sesión...
-              </span>
-              <span v-else>
-                Ingresar al sistema
-              </span>
-            </button>
-          </form>
+        <div class="admin-only-notice">
+          <span>🛡️</span>
+          <p>
+            ¿Tu restaurante aún no tiene código de acceso? Solicita tu alta directamente con el administrador de <strong>RODO Moto Mandados</strong>.
+          </p>
         </div>
 
       </section>
@@ -420,33 +240,18 @@ function switchToLoginWithName() {
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.07);
 }
 
-.auth-tabs {
-  display: flex;
-  background: #f1f5f9;
-  border-radius: 10px;
-  padding: 4px;
-  margin-bottom: 24px;
-  gap: 4px;
-}
-
-.tab-btn {
-  flex: 1;
-  padding: 10px 14px;
-  border: none;
-  background: transparent;
-  color: #64748b;
-  font-weight: 600;
-  font-size: 14px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.tab-btn.active {
-  background: #fff;
+.login-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
   color: #d71920;
+  font-size: 12.5px;
   font-weight: 700;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  margin-bottom: 16px;
 }
 
 .card-heading {
@@ -516,26 +321,6 @@ function switchToLoginWithName() {
   line-height: 1.5;
 }
 
-.error-message p {
-  margin: 0 0 8px;
-}
-
-.btn-switch-login {
-  background: #d71920;
-  color: #fff;
-  border: none;
-  padding: 6px 12px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  display: inline-block;
-}
-
-.btn-switch-login:hover {
-  background: #b9151b;
-}
-
 .submit-button {
   width: 100%;
   margin-top: 24px;
@@ -558,6 +343,24 @@ function switchToLoginWithName() {
 .submit-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.admin-only-notice {
+  margin-top: 22px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 12.5px;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.admin-only-notice p {
+  margin: 0;
 }
 
 .register-footer {

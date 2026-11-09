@@ -1362,9 +1362,14 @@ onMounted(async () => {
       }
     }
 
-    error.value = 'No hay una sesión válida. Inicia sesión o registra tu restaurante.'
+    error.value = 'No hay una sesión válida. Inicia sesión con el código de tu restaurante.'
   }
 })
+
+// Regresar a la pantalla de login principal
+function goBackToLogin() {
+  router.push('/registro')
+}
 
 // Envío del pedido a Laravel
 async function submitOrder() {
@@ -1500,6 +1505,14 @@ function resetOrderForm() {
     <header class="portal-header">
       <div class="header-inner">
         <div class="brand-group">
+          <button
+            type="button"
+            class="btn-header-back"
+            title="Volver al inicio de sesión principal"
+            @click="goBackToLogin"
+          >
+            ← Inicio
+          </button>
           <div class="logo-box">RODO</div>
           <div class="brand-text">
             <h1>RODO Moto Mandados</h1>
@@ -1507,20 +1520,34 @@ function resetOrderForm() {
           </div>
         </div>
 
-        <div v-if="restaurant" class="header-restaurant-pill">
-          <span class="online-indicator" />
-          <span class="restaurant-name">{{ restaurant.name }}</span>
-          <span class="restaurant-code">#{{ restaurant.code }}</span>
+        <div class="header-right-actions">
+          <div v-if="restaurant" class="header-restaurant-pill">
+            <span class="online-indicator" />
+            <span class="restaurant-name">{{ restaurant.name }}</span>
+            <span class="restaurant-code">#{{ restaurant.code }}</span>
+          </div>
         </div>
       </div>
     </header>
 
     <main class="portal-main">
 
-      <!-- Título de sección -->
+      <!-- Título de sección con botón de retroceso rápido -->
       <div class="intro-section">
-        <h2>Solicitar una entrega</h2>
-        <p>Registra los datos del pedido en pocos pasos o toma una foto del ticket para intentar llenar los campos automáticamente.</p>
+        <div class="intro-top-row">
+          <div>
+            <h2>Solicitar una entrega</h2>
+            <p>Registra los datos del pedido en pocos pasos o toma una foto del ticket para intentar llenar los campos automáticamente.</p>
+          </div>
+          <button
+            type="button"
+            class="btn-back-login"
+            @click="goBackToLogin"
+          >
+            <span>←</span>
+            <span>Volver al login</span>
+          </button>
+        </div>
       </div>
 
       <!-- Pantalla de confirmación y Ticket Digital (Fase 3.4) -->
@@ -1605,7 +1632,7 @@ function resetOrderForm() {
             class="action-btn"
             style="background: #d71920; color: #fff; text-decoration: none; padding: 6px 14px; border-radius: 8px; font-weight: 600; font-size: 0.85rem;"
           >
-            🔑 Iniciar sesión / Registrar
+            🔑 Iniciar sesión
           </router-link>
         </div>
       </div>
@@ -1615,13 +1642,13 @@ function resetOrderForm() {
         <div style="font-size: 48px; margin-bottom: 12px;">🏪</div>
         <h3 style="font-size: 1.35rem; margin-bottom: 8px; color: #1e293b; font-weight: 800;">Identificación requerida</h3>
         <p style="color: #64748b; max-width: 480px; margin: 0 auto 24px; font-size: 0.95rem; line-height: 1.5;">
-          Para poder registrar pedidos y solicitar repartidores, ingresa con el nombre o código de tu establecimiento.
+          Para poder registrar pedidos y solicitar repartidores, ingresa con el código de 3 dígitos o nombre de tu establecimiento autorizado.
         </p>
         <router-link
           to="/registro"
           style="display: inline-flex; align-items: center; gap: 8px; background: linear-gradient(135deg, #d71920, #b9151b); color: #fff; padding: 12px 24px; border-radius: 10px; text-decoration: none; font-weight: 700; box-shadow: 0 4px 12px rgba(215, 25, 32, 0.3);"
         >
-          Iniciar sesión o Registrarse →
+          ← Ir al login principal
         </router-link>
       </div>
 
@@ -1640,16 +1667,28 @@ function resetOrderForm() {
               <p class="help-micro">Tu sucursal está autenticada mediante tu sesión activa en RODO.</p>
             </div>
 
-            <a
-              :href="assistanceWhatsappUrl"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="btn-assistance-top"
-              title="Contactar a Asistencia RODO por WhatsApp (415 101 9920)"
-            >
-              <span>🎧</span>
-              <span>Asistencia</span>
-            </a>
+            <div class="local-banner-actions">
+              <button
+                type="button"
+                class="btn-back-banner"
+                title="Regresar al login principal / cambiar de cuenta"
+                @click="goBackToLogin"
+              >
+                <span>←</span>
+                <span>Cambiar cuenta</span>
+              </button>
+
+              <a
+                :href="assistanceWhatsappUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn-assistance-top"
+                title="Contactar a Asistencia RODO por WhatsApp (415 101 9920)"
+              >
+                <span>🎧</span>
+                <span>Asistencia</span>
+              </a>
+            </div>
           </div>
         </div>
 
@@ -2332,6 +2371,34 @@ function resetOrderForm() {
   gap: 14px;
 }
 
+.btn-header-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 13px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-header-back:hover {
+  background: rgba(255, 255, 255, 0.28);
+  transform: translateX(-1px);
+}
+
+.header-right-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .logo-box {
   width: 54px;
   height: 48px;
@@ -2401,6 +2468,37 @@ function resetOrderForm() {
   margin-bottom: 22px;
 }
 
+.intro-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.btn-back-login {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #1e293b;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.05);
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-back-login:hover {
+  border-color: #d71920;
+  color: #d71920;
+  background: #fff5f5;
+}
+
 .intro-section h2 {
   font-size: 28px;
   font-weight: 800;
@@ -2457,6 +2555,35 @@ function resetOrderForm() {
   justify-content: space-between;
   gap: 14px;
   flex-wrap: wrap;
+}
+
+.local-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn-back-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #ffffff;
+  color: #334155;
+  border: 1px solid #efb5b8;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 9px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-back-banner:hover {
+  background: #fff0f0;
+  color: #d71920;
+  border-color: #d71920;
 }
 
 .btn-assistance-top {

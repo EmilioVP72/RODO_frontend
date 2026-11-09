@@ -1,7 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import RestaurantRegister from '../views/public/RestaurantRegister.vue'
-import RegistrationSuccess from '../views/restaurant/RegistrationSuccess.vue'
 import OrderForm from '../views/restaurant/OrderForm.vue'
 import PublicTicket from '../views/public/PublicTicket.vue'
 
@@ -12,13 +11,9 @@ const routes = [
   },
   {
     path: '/registro',
+    alias: ['/login'],
     name: 'restaurant-register',
     component: RestaurantRegister,
-  },
-  {
-    path: '/registro/exitoso',
-    name: 'registration-success',
-    component: RegistrationSuccess,
   },
   {
     path: '/pedidos/nuevo',
