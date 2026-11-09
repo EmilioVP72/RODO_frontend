@@ -107,11 +107,6 @@ async function loginRestaurant() {
 
       <section class="register-card">
 
-        <div class="login-mode-badge">
-          <span>🔑</span>
-          <span>Ya tengo cuenta · Acceso Autorizado</span>
-        </div>
-
         <div class="card-heading">
           <h2>Ingresar al sistema</h2>
           <p>
